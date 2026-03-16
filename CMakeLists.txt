@@ -26,9 +26,6 @@ if(EUI_STRICT_WARNINGS)
     endif()
 endif()
 
-add_executable(eui_header_check tests/header_check.cpp)
-target_link_libraries(eui_header_check PRIVATE EUI::eui)
-
 if(EUI_BUILD_EXAMPLES)
     include(FetchContent)
 
@@ -86,13 +83,22 @@ if(EUI_BUILD_EXAMPLES)
     endif()
 
     if(EUI_OPENGL_TARGET AND EUI_GLFW_TARGET)
-        add_executable(eui_demo examples/basic_demo.cpp)
+        add_executable(eui_demo WIN32 examples/basic_demo.cpp)
         target_link_libraries(eui_demo PRIVATE EUI::eui ${EUI_GLFW_TARGET} ${EUI_OPENGL_TARGET})
         target_compile_definitions(eui_demo PRIVATE EUI_ENABLE_GLFW_OPENGL_BACKEND=1)
         if(MSVC)
             target_compile_options(eui_demo PRIVATE /W4)
         else()
             target_compile_options(eui_demo PRIVATE -Wall -Wextra -Wpedantic)
+        endif()
+
+        add_executable(eui_calculator_demo WIN32 examples/calculator_demo.cpp)
+        target_link_libraries(eui_calculator_demo PRIVATE EUI::eui ${EUI_GLFW_TARGET} ${EUI_OPENGL_TARGET})
+        target_compile_definitions(eui_calculator_demo PRIVATE EUI_ENABLE_GLFW_OPENGL_BACKEND=1)
+        if(MSVC)
+            target_compile_options(eui_calculator_demo PRIVATE /W4)
+        else()
+            target_compile_options(eui_calculator_demo PRIVATE -Wall -Wextra -Wpedantic)
         endif()
     elseif(NOT EUI_OPENGL_TARGET)
         message(WARNING
