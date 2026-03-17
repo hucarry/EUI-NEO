@@ -284,6 +284,7 @@ enum class CommandType {
     FilledRect,
     RectOutline,
     Text,
+    Chevron,
 };
 
 enum class TextAlign {
@@ -303,6 +304,7 @@ struct DrawCommand {
     TextAlign align{TextAlign::Left};
     float radius{0.0f};
     float thickness{1.0f};
+    float rotation{0.0f};
     bool has_clip{false};
     std::uint64_t hash{0ull};
 };
@@ -345,6 +347,10 @@ public:
     void set_corner_radius(float radius) {
         corner_radius_ = std::clamp(radius, 0.0f, 28.0f);
         theme_.radius = corner_radius_;
+    }
+
+    void set_global_alpha(float alpha) {
+        global_alpha_ = std::clamp(alpha, 0.0f, 1.0f);
     }
 
     float corner_radius() const {
@@ -395,6 +401,11 @@ public:
         frame_height_ = std::max(1.0f, height);
         input_ = input;
         repaint_requested_ = false;
+        global_alpha_ = 1.0f;
+        motion_frame_id_ += 1u;
+        if ((motion_frame_id_ & 63u) == 0u) {
+            prune_motion_states();
+        }
         if (has_prev_input_time_) {
             const double dt = input_.time_seconds - prev_input_time_;
             ui_dt_ = std::clamp(static_cast<float>(dt), 1.0f / 240.0f, 0.10f);
@@ -471,6 +482,7 @@ public:
         const float panel_w = std::max(140.0f, width);
         const float panel_h = std::max(120.0f, frame_height_ - y - 20.0f);
         panel_rect_ = Rect{x, y, panel_w, panel_h};
+        panel_id_seed_ = hash_sv(title);
 
         if (radius >= 0.0f) {
             add_filled_rect(panel_rect_, theme_.panel, radius);
@@ -480,8 +492,6 @@ public:
         content_x_ = x + padding;
         content_width_ = std::max(20.0f, panel_w - 2.0f * padding);
         cursor_y_ = y + padding;
-
-        panel_id_seed_ = hash_sv(title);
         if (!title.empty()) {
             const float title_font = std::clamp(theme_.radius * 1.4f, 14.0f, 24.0f);
             const float title_h = title_font + 2.0f;
@@ -678,43 +688,65 @@ public:
             fill = mix(fill, theme_.secondary_hover, 0.30f);
         }
 
-        add_filled_rect(rect, fill, theme_.radius);
-        add_outline_rect(rect, style == ButtonStyle::Primary ? theme_.primary : theme_.outline, theme_.radius);
+        MotionState& motion =
+            update_motion_state(motion_id(draw_label, rect, 0x1a2b3c4d5e6f7001ull), hovered, held);
+        const float hover_v = snap_visual_motion(motion.hover);
+        const float press_v = snap_visual_motion(motion.press, 1.0f / 36.0f);
+        const float visual_scale = 1.0f - press_v * 0.018f;
+        Rect visual_rect = scale_rect_from_center(rect, visual_scale, visual_scale);
+        visual_rect = translate_rect(visual_rect, 0.0f, press_v * 0.4f);
+        const Color outline_color = mix(style == ButtonStyle::Primary ? theme_.primary : theme_.outline,
+                                        theme_.focus_ring, hover_v * 0.26f + press_v * 0.12f);
+        if (style == ButtonStyle::Primary) {
+            fill = mix(fill, theme_.panel, hover_v * 0.12f);
+            add_soft_glow(visual_rect, theme_.primary, theme_.radius, hover_v * 0.54f + press_v * 0.14f,
+                          6.5f);
+        } else {
+            fill = mix(fill, theme_.panel, hover_v * 0.05f);
+            add_soft_glow(visual_rect, mix(theme_.primary, theme_.secondary, 0.52f), theme_.radius,
+                          hover_v * 0.12f, 5.0f);
+        }
+
+        add_filled_rect(visual_rect, fill, theme_.radius);
+        add_outline_rect(visual_rect, outline_color, theme_.radius, 1.0f + hover_v * 0.14f);
         if (icon_text_combo) {
-            const float pad = force_left_align ? std::clamp(rect.h * 0.24f, 9.0f, 14.0f)
-                                               : std::clamp(rect.h * 0.24f, 8.0f, 14.0f);
+            const float pad = force_left_align ? std::clamp(visual_rect.h * 0.24f, 9.0f, 14.0f)
+                                               : std::clamp(visual_rect.h * 0.24f, 8.0f, 14.0f);
             const float icon_size =
                 force_left_align
-                    ? std::clamp(rect.h * 0.46f * k_icon_visual_scale * resolved_text_scale, 10.0f, 24.0f)
-                    : std::clamp(rect.h * 0.60f * k_icon_visual_scale * resolved_text_scale, 12.0f, 36.0f);
-            const float icon_w = force_left_align ? std::max(icon_size + 2.0f, rect.h * 0.44f)
-                                                  : std::max(14.0f, rect.h - pad * 0.2f);
+                    ? std::clamp(visual_rect.h * 0.46f * k_icon_visual_scale * resolved_text_scale, 10.0f, 24.0f)
+                    : std::clamp(visual_rect.h * 0.60f * k_icon_visual_scale * resolved_text_scale, 12.0f, 36.0f);
+            const float icon_w = force_left_align ? std::max(icon_size + 2.0f, visual_rect.h * 0.44f)
+                                                  : std::max(14.0f, visual_rect.h - pad * 0.2f);
             const Rect icon_rect{
-                rect.x + pad,
-                rect.y,
+                visual_rect.x + pad,
+                visual_rect.y,
                 icon_w,
-                rect.h,
+                visual_rect.h,
             };
             const float gap = force_left_align ? std::max(6.0f, pad * 0.58f) : std::max(4.0f, pad * 0.45f);
             const float text_x = icon_rect.x + icon_rect.w + gap;
             const Rect text_rect{
                 text_x,
-                rect.y,
-                std::max(0.0f, rect.x + rect.w - text_x - pad),
-                rect.h,
+                visual_rect.y,
+                std::max(0.0f, visual_rect.x + visual_rect.w - text_x - pad),
+                visual_rect.h,
             };
             const float combo_text_size =
-                force_left_align ? std::clamp(rect.h * 0.37f * resolved_text_scale, 12.0f, 30.0f)
-                                 : std::clamp(rect.h * 0.35f * resolved_text_scale, 11.0f, 30.0f);
+                force_left_align ? std::clamp(visual_rect.h * 0.37f * resolved_text_scale, 12.0f, 30.0f)
+                                 : std::clamp(visual_rect.h * 0.35f * resolved_text_scale, 11.0f, 30.0f);
             add_text(icon_part, icon_rect, text_color, icon_size, TextAlign::Center);
             add_text(text_part, text_rect, text_color, combo_text_size, TextAlign::Left);
         } else {
             if (force_left_align) {
-                const float pad = std::clamp(rect.h * 0.24f, 8.0f, 14.0f);
-                add_text(draw_label, Rect{rect.x + pad, rect.y, std::max(0.0f, rect.w - pad * 1.5f), rect.h},
+                const float pad = std::clamp(visual_rect.h * 0.24f, 8.0f, 14.0f);
+                add_text(draw_label,
+                         Rect{visual_rect.x + pad, visual_rect.y,
+                              std::max(0.0f, visual_rect.w - pad * 1.5f), visual_rect.h},
                          text_color, text_size, TextAlign::Left);
             } else {
-                add_text(draw_label, Rect{rect.x, rect.y, rect.w, rect.h}, text_color, text_size, TextAlign::Center);
+                add_text(draw_label, Rect{visual_rect.x, visual_rect.y, visual_rect.w, visual_rect.h}, text_color,
+                         text_size, TextAlign::Center);
             }
         }
 
@@ -726,23 +758,26 @@ public:
         const bool hovered = rect.contains(input_.mouse_x, input_.mouse_y);
         const bool held = hovered && input_.mouse_down;
         const float text_size = std::clamp(rect.h * 0.42f, 13.0f, 26.0f);
-
-        Color fill = selected ? mix(theme_.primary, theme_.panel, 0.74f) : theme_.secondary;
-        if (selected && hovered) {
-            fill = mix(theme_.primary, theme_.panel, 0.66f);
-        } else if (!selected && hovered) {
-            fill = theme_.secondary_hover;
-        }
-        if (held) {
-            fill = mix(fill, theme_.secondary_active, selected ? 0.22f : 0.35f);
-        }
-
+        MotionState& motion =
+            update_motion_state(motion_id(label, rect, 0x1a2b3c4d5e6f7002ull), hovered, held, false, selected);
+        const float hover_v = snap_visual_motion(motion.hover);
+        const float press_v = snap_visual_motion(motion.press, 1.0f / 36.0f);
+        const float active_v = snap_visual_motion(motion.active, 1.0f / 40.0f);
+        Color fill = mix(theme_.secondary, mix(theme_.primary, theme_.panel, 0.72f), active_v);
+        fill = mix(fill, selected ? theme_.primary : theme_.secondary_hover, hover_v * (selected ? 0.16f : 0.28f));
+        fill = mix(fill, theme_.secondary_active, press_v * (selected ? 0.18f : 0.32f));
         const float tab_radius = std::max(0.0f, theme_.radius - 2.0f);
-        add_filled_rect(rect, fill, tab_radius);
-        add_outline_rect(rect, selected ? theme_.primary : mix(theme_.outline, theme_.panel, 0.6f), tab_radius,
-                         selected ? 1.4f : 1.0f);
-        add_text(label, Rect{rect.x, rect.y, rect.w, rect.h},
-                 selected ? theme_.text : theme_.muted_text, text_size, TextAlign::Center);
+        const float visual_scale = 1.0f + active_v * 0.004f - press_v * 0.014f;
+        Rect visual_rect = scale_rect_from_center(rect, visual_scale, visual_scale);
+        visual_rect = translate_rect(visual_rect, 0.0f, press_v * 0.3f);
+        add_soft_glow(visual_rect, theme_.primary, tab_radius, active_v * 0.34f + hover_v * 0.06f, 5.0f);
+        add_filled_rect(visual_rect, fill, tab_radius);
+        add_outline_rect(visual_rect,
+                         mix(mix(theme_.outline, theme_.panel, 0.6f), theme_.primary,
+                             active_v * 0.78f + hover_v * 0.18f),
+                         tab_radius, 1.0f + active_v * 0.36f + hover_v * 0.06f);
+        add_text(label, Rect{visual_rect.x, visual_rect.y, visual_rect.w, visual_rect.h},
+                 mix(theme_.muted_text, theme_.text, 0.38f + active_v * 0.62f), text_size, TextAlign::Center);
 
         return hovered && input_.mouse_pressed;
     }
@@ -836,14 +871,25 @@ public:
             inner_h,
         };
         const bool thumb_hovered = thumb.contains(input_.mouse_x, input_.mouse_y);
-
-        add_filled_rect(rect, theme_.secondary, radius);
+        MotionState& slider_motion =
+            update_motion_state(motion_id(id, 0x1a2b3c4d5e6f7003ull), hovered, active_slider_id_ == id && input_.mouse_down,
+                                false, active_slider_id_ == id);
+        MotionState& thumb_motion =
+            update_motion_state(motion_id(id, 0x1a2b3c4d5e6f7004ull), thumb_hovered,
+                                active_slider_id_ == id && input_.mouse_down, false, active_slider_id_ == id);
+        const float slider_hover_v = snap_visual_motion(slider_motion.hover);
+        const float slider_active_v = snap_visual_motion(slider_motion.active, 1.0f / 40.0f);
+        const float thumb_hover_v = snap_visual_motion(thumb_motion.hover);
+        const float thumb_active_v = snap_visual_motion(thumb_motion.active, 1.0f / 36.0f);
+        add_filled_rect(rect, mix(theme_.secondary, theme_.panel, slider_hover_v * 0.05f), radius);
         if (fill.w > 0.0f && fill.h > 0.0f) {
             const float fill_radius = std::max(
                 0.0f, std::min(std::min(radius - 1.0f, fill.h * 0.5f), fill.w * 0.5f));
             add_filled_rect(fill, mix(theme_.primary, theme_.secondary, 0.75f), fill_radius);
         }
-        add_outline_rect(rect, hovered ? theme_.primary : theme_.outline, radius);
+        add_outline_rect(rect,
+                         mix(theme_.outline, theme_.primary, slider_hover_v * 0.44f + slider_active_v * 0.16f),
+                         radius, 1.0f + slider_hover_v * 0.08f);
         const float thumb_radius = std::max(0.0f, std::min(theme_.radius - 1.0f, std::min(thumb.w, thumb.h) * 0.5f));
         Color thumb_color = theme_.primary;
         if (active_slider_id_ == id) {
@@ -851,7 +897,11 @@ public:
         } else if (thumb_hovered) {
             thumb_color = mix(theme_.primary, theme_.panel, 0.10f);
         }
-        add_filled_rect(thumb, thumb_color, thumb_radius);
+        const float thumb_scale = 1.0f + thumb_active_v * 0.05f;
+        Rect visual_thumb = scale_rect_from_center(thumb, thumb_scale, thumb_scale);
+        add_soft_glow(visual_thumb, theme_.primary, thumb_radius, thumb_hover_v * 0.14f + thumb_active_v * 0.18f,
+                      3.6f);
+        add_filled_rect(visual_thumb, thumb_color, thumb_radius);
 
         add_text(label,
                  Rect{rect.x + value_padding, rect.y,
@@ -859,10 +909,9 @@ public:
                  theme_.text, label_font, TextAlign::Left);
 
         const bool editing = is_text_input_active(id);
-        add_filled_rect(value_box, editing ? theme_.input_bg : mix(theme_.input_bg, theme_.secondary, 0.25f),
-                        theme_.radius - 2.0f);
-        add_outline_rect(value_box, editing ? theme_.focus_ring : theme_.input_border, theme_.radius - 2.0f,
-                         editing ? 1.5f : 1.0f);
+        draw_input_chrome(motion_id(id, 0x1a2b3c4d5e6f7005ull), value_box, value_hovered || editing, editing,
+                          editing ? theme_.input_bg : mix(theme_.input_bg, theme_.secondary, 0.25f),
+                          theme_.radius - 2.0f, editing ? 1.2f : 1.0f);
 
         if (editing) {
             draw_text_input_content(value_box, value_font, true, value_padding, theme_.text,
@@ -925,9 +974,8 @@ public:
         }
 
         const bool editing = is_text_input_active(id);
-        add_filled_rect(input_rect, theme_.input_bg, theme_.radius - 2.0f);
-        add_outline_rect(input_rect, editing ? theme_.focus_ring : theme_.input_border, theme_.radius - 2.0f,
-                         editing ? 1.5f : 1.0f);
+        draw_input_chrome(motion_id(id, 0x1a2b3c4d5e6f7006ull), input_rect, hovered || editing, editing,
+                          theme_.input_bg, theme_.radius - 2.0f, editing ? 1.2f : 1.0f);
 
         if (editing) {
             draw_text_input_content(input_rect, value_font, true, input_padding, theme_.text,
@@ -1001,9 +1049,8 @@ public:
             }
         }
 
-        add_filled_rect(input_rect, theme_.input_bg, theme_.radius - 2.0f);
-        add_outline_rect(input_rect, editing ? theme_.focus_ring : theme_.input_border, theme_.radius - 2.0f,
-                         editing ? 1.5f : 1.0f);
+        draw_input_chrome(motion_id(id, 0x1a2b3c4d5e6f7007ull), input_rect, hovered || editing, editing,
+                          theme_.input_bg, theme_.radius - 2.0f, editing ? 1.2f : 1.0f);
 
         if (editing) {
             draw_text_input_content(input_rect, value_font, align_right, input_padding, theme_.text,
@@ -1050,8 +1097,9 @@ public:
         if (has_label) {
             add_text(label, label_rect, theme_.text, label_font, TextAlign::Left);
         }
-        add_filled_rect(input_rect, mix(theme_.input_bg, theme_.secondary, 0.08f), theme_.radius - 2.0f);
-        add_outline_rect(input_rect, theme_.input_border, theme_.radius - 2.0f, 1.0f);
+        const bool hovered = input_rect.contains(input_.mouse_x, input_.mouse_y);
+        draw_input_chrome(motion_id(label, input_rect, 0x1a2b3c4d5e6f7008ull), input_rect, hovered, false,
+                          mix(theme_.input_bg, theme_.secondary, 0.08f), theme_.radius - 2.0f, 1.0f);
         draw_static_input_content(input_rect, value, value_font, align_right, input_padding,
                                   muted ? theme_.muted_text : theme_.text);
     }
@@ -1210,10 +1258,14 @@ public:
             repaint_requested_ = true;
         }
 
+        MotionState& thumb_motion =
+            update_motion_state(motion_id(id, 0x1a2b3c4d5e6f700cull), hovered_thumb,
+                                active_scrollbar_drag_id_ == id && input_.mouse_down, false,
+                                active_scrollbar_drag_id_ == id);
         if (options.draw_background) {
-            add_filled_rect(outer, mix(theme_.input_bg, theme_.secondary, 0.10f), theme_.radius - 2.0f);
-            add_outline_rect(outer, hovered_outer ? theme_.focus_ring : theme_.input_border, theme_.radius - 2.0f,
-                             hovered_outer ? 1.3f : 1.0f);
+            draw_input_chrome(motion_id(id, 0x1a2b3c4d5e6f700dull), outer, hovered_outer,
+                              active_scroll_drag_id_ == id || active_scrollbar_drag_id_ == id,
+                              mix(theme_.input_bg, theme_.secondary, 0.10f), theme_.radius - 2.0f, 1.0f);
         }
 
         if (show_scrollbar) {
@@ -1234,7 +1286,13 @@ public:
                                                  : mix(theme_.primary, theme_.panel, 0.40f))
                                           : mix(theme_.outline, theme_.panel, 0.55f);
             add_filled_rect(track, track_color, std::max(0.0f, std::min(track.w, track.h) * 0.5f));
-            add_filled_rect(draw_thumb, thumb_color, std::max(0.0f, std::min(draw_thumb.w, draw_thumb.h) * 0.5f));
+            const float thumb_hover_v = snap_visual_motion(thumb_motion.hover);
+            const float thumb_active_v = snap_visual_motion(thumb_motion.active, 1.0f / 36.0f);
+            const float thumb_scale = 1.0f + thumb_active_v * 0.05f;
+            const Rect visual_thumb = scale_rect_from_center(draw_thumb, 1.0f, thumb_scale);
+            add_soft_glow(visual_thumb, theme_.primary, std::max(0.0f, std::min(draw_thumb.w, draw_thumb.h) * 0.5f),
+                          thumb_hover_v * 0.12f + thumb_active_v * 0.18f, 3.2f);
+            add_filled_rect(visual_thumb, thumb_color, std::max(0.0f, std::min(visual_thumb.w, visual_thumb.h) * 0.5f));
         }
 
         const bool had_outer_row = row_.active;
@@ -1618,9 +1676,8 @@ public:
         }
 
         add_text(label, label_rect, theme_.muted_text, label_font, TextAlign::Left);
-        add_filled_rect(box_rect, mix(theme_.input_bg, theme_.secondary, 0.08f), radius);
-        add_outline_rect(box_rect, (hovered_box || editing) ? theme_.focus_ring : theme_.input_border, radius,
-                         (hovered_box || editing) ? 1.3f : 1.0f);
+        draw_input_chrome(motion_id(id, 0x1a2b3c4d5e6f700eull), box_rect, hovered_box || editing, editing,
+                          mix(theme_.input_bg, theme_.secondary, 0.08f), radius, editing ? 1.1f : 1.0f);
 
         if (input_.mouse_pressed && hovered_thumb) {
             active_textarea_scroll_id_ = id;
@@ -1637,8 +1694,17 @@ public:
             }
         }
 
+        MotionState& thumb_motion =
+            update_motion_state(motion_id(id, 0x1a2b3c4d5e6f700full), hovered_thumb,
+                                active_textarea_scroll_id_ == id && input_.mouse_down, false,
+                                active_textarea_scroll_id_ == id);
+        const float thumb_hover_v = snap_visual_motion(thumb_motion.hover);
+        const float thumb_active_v = snap_visual_motion(thumb_motion.active, 1.0f / 36.0f);
         add_filled_rect(track, mix(theme_.secondary, theme_.panel, 0.45f), 3.0f);
-        add_filled_rect(thumb, hovered_thumb ? theme_.primary : mix(theme_.primary, theme_.panel, 0.40f), 3.0f);
+        const Rect visual_thumb =
+            scale_rect_from_center(thumb, 1.0f, 1.0f + thumb_active_v * 0.05f);
+        add_soft_glow(visual_thumb, theme_.primary, 3.0f, thumb_hover_v * 0.12f + thumb_active_v * 0.18f, 3.2f);
+        add_filled_rect(visual_thumb, hovered_thumb ? theme_.primary : mix(theme_.primary, theme_.panel, 0.40f), 3.0f);
 
         const float line_offset = std::fmod(state.scroll, line_h);
         std::size_t first_line = static_cast<std::size_t>(std::floor(state.scroll / line_h));
@@ -1795,9 +1861,8 @@ public:
         }
 
         add_text(label, label_rect, theme_.muted_text, label_font, TextAlign::Left);
-        add_filled_rect(box_rect, mix(theme_.input_bg, theme_.secondary, 0.08f), radius);
-        add_outline_rect(box_rect, hovered_box ? theme_.focus_ring : theme_.input_border, radius,
-                         hovered_box ? 1.3f : 1.0f);
+        draw_input_chrome(motion_id(id, 0x1a2b3c4d5e6f7010ull), box_rect, hovered_box, false,
+                          mix(theme_.input_bg, theme_.secondary, 0.08f), radius, 1.0f);
 
         const Rect track{
             box_rect.x + box_rect.w - text_pad - scrollbar_w,
@@ -1828,8 +1893,17 @@ public:
             }
         }
 
+        MotionState& thumb_motion =
+            update_motion_state(motion_id(id, 0x1a2b3c4d5e6f7011ull), hovered_thumb,
+                                active_textarea_scroll_id_ == id && input_.mouse_down, false,
+                                active_textarea_scroll_id_ == id);
+        const float thumb_hover_v = snap_visual_motion(thumb_motion.hover);
+        const float thumb_active_v = snap_visual_motion(thumb_motion.active, 1.0f / 36.0f);
         add_filled_rect(track, mix(theme_.secondary, theme_.panel, 0.45f), 3.0f);
-        add_filled_rect(thumb, hovered_thumb ? theme_.primary : mix(theme_.primary, theme_.panel, 0.40f), 3.0f);
+        const Rect visual_thumb =
+            scale_rect_from_center(thumb, 1.0f, 1.0f + thumb_active_v * 0.05f);
+        add_soft_glow(visual_thumb, theme_.primary, 3.0f, thumb_hover_v * 0.12f + thumb_active_v * 0.18f, 3.2f);
+        add_filled_rect(visual_thumb, hovered_thumb ? theme_.primary : mix(theme_.primary, theme_.panel, 0.40f), 3.0f);
 
         const float line_offset = std::fmod(state.scroll, line_h);
         std::size_t first_line = static_cast<std::size_t>(std::floor(state.scroll / line_h));
@@ -1853,6 +1927,7 @@ public:
         const float label_h = std::clamp(height * 1.6f, 14.0f, 26.0f);
         const float text_gap = std::max(8.0f, label_h + 4.0f);
         const Rect rect = next_rect(height + text_gap);
+        const float animated_ratio = update_motion_value(motion_id(label, rect, 0x1a2b3c4d5e6f7009ull), ratio, 9.0f);
 
         add_text(label, Rect{rect.x, rect.y, rect.w * 0.7f, label_h}, theme_.muted_text, label_h,
                  TextAlign::Left);
@@ -1866,7 +1941,7 @@ public:
         const Rect fill{
             track.x + 1.0f,
             track.y + 1.0f,
-            std::max(0.0f, track.w * ratio - 2.0f),
+            std::max(0.0f, track.w * animated_ratio - 2.0f),
             std::max(0.0f, track.h - 2.0f),
         };
         const float track_radius = track.h * 0.5f;
@@ -1874,6 +1949,7 @@ public:
         if (fill.w > 0.0f && fill.h > 0.0f) {
             const float fill_radius = std::max(
                 0.0f, std::min(std::min(track_radius - 1.0f, fill.h * 0.5f), fill.w * 0.5f));
+            add_soft_glow(fill, theme_.track_fill, fill_radius, std::min(1.0f, animated_ratio) * 0.22f, 4.5f);
             add_filled_rect(fill, theme_.track_fill, fill_radius);
         }
     }
@@ -1883,28 +1959,42 @@ public:
         const float header_height = std::max(34.0f, padding * 3.0f);
         const Rect header = next_rect(header_height);
         const bool hovered = header.contains(input_.mouse_x, input_.mouse_y);
+        const std::uint64_t reveal_id = motion_id(label, header, 0x1a2b3c4d5e6f7013ull);
         if (hovered && input_.mouse_pressed) {
             open = !open;
+            if (open) {
+                MotionState& reveal_state = touch_motion_state(reveal_id);
+                reveal_state.value = 0.0f;
+                reveal_state.value_initialized = true;
+            }
         }
-
-        Color fill = theme_.panel;
-        if (hovered) {
-            fill = mix(theme_.panel, theme_.secondary_hover, 0.35f);
-        }
-
-        add_filled_rect(header, fill, theme_.radius);
-        add_outline_rect(header, theme_.outline, theme_.radius);
+        MotionState& motion =
+            update_motion_state(motion_id(label, header, 0x1a2b3c4d5e6f700aull), hovered, hovered && input_.mouse_down,
+                                false, open);
+        Color fill = mix(theme_.panel, theme_.secondary_hover, motion.hover * 0.32f + motion.active * 0.08f);
+        const Rect visual_header = header;
+        add_soft_glow(visual_header, theme_.primary, theme_.radius, motion.active * 0.26f + motion.hover * 0.10f, 5.0f);
+        add_filled_rect(visual_header, fill, theme_.radius);
+        add_outline_rect(visual_header, mix(theme_.outline, theme_.focus_ring, motion.hover * 0.20f + motion.active * 0.18f),
+                         theme_.radius, 1.0f + motion.hover * 0.10f);
         const float header_font = std::clamp(header.h * 0.38f, 13.0f, 24.0f);
         const float header_pad = std::clamp(header.h * 0.28f, 10.0f, 22.0f);
+        const float indicator_size = std::clamp(header.h * 0.34f, 10.0f, 18.0f);
         add_text(label,
-                 Rect{header.x + header_pad, header.y,
-                      header.w - header_pad * 2.0f - header_font, header.h},
+                 Rect{visual_header.x + header_pad, visual_header.y,
+                      visual_header.w - header_pad * 2.0f - indicator_size - 6.0f, visual_header.h},
                  theme_.text, header_font, TextAlign::Left);
-        add_text(open ? "V" : ">",
-                 Rect{header.x + header_pad, header.y,
-                      header.w - header_pad * 2.0f, header.h},
-                 theme_.muted_text, header_font, TextAlign::Right);
-
+        const float reveal = std::clamp(update_motion_value(reveal_id, open ? 1.0f : 0.0f, open ? 12.0f : 16.0f),
+                                        0.0f, 1.0f);
+        const float reveal_alpha = 1.0f - (1.0f - reveal) * (1.0f - reveal);
+        const Rect indicator_rect{
+            visual_header.x + visual_header.w - header_pad - indicator_size,
+            visual_header.y + (visual_header.h - indicator_size) * 0.5f,
+            indicator_size,
+            indicator_size,
+        };
+        add_chevron(indicator_rect, mix(theme_.muted_text, theme_.text, motion.active * 0.20f + motion.hover * 0.10f),
+                    reveal * (3.1415926535f * 0.5f), std::clamp(header.h * 0.065f, 1.4f, 2.4f));
         if (!open) {
             return false;
         }
@@ -1915,12 +2005,22 @@ public:
         padding = std::clamp(padding, 4.0f, 24.0f);
 
         const Rect body{content_x_, cursor_y_, content_width_, body_height};
+        const float body_alpha = std::clamp(0.16f + reveal_alpha * 0.84f, 0.0f, 1.0f);
         const std::size_t fill_cmd_index = commands_.size();
-        add_filled_rect(body, mix(theme_.panel, theme_.secondary, 0.35f), theme_.radius);
+        const GlowCommandRange body_glow =
+            add_soft_glow_tracked(body, theme_.primary, theme_.radius, motion.active * 0.10f + reveal_alpha * 0.14f,
+                                  6.0f);
+        add_filled_rect(body,
+                        scale_alpha(mix(theme_.panel, theme_.secondary, 0.35f), body_alpha),
+                        theme_.radius);
         const std::size_t outline_cmd_index = commands_.size();
-        add_outline_rect(body, theme_.outline, theme_.radius);
+        add_outline_rect(body,
+                         scale_alpha(mix(theme_.outline, theme_.focus_ring, motion.active * 0.16f),
+                                     0.18f + reveal_alpha * 0.82f),
+                         theme_.radius, 1.0f + motion.active * 0.12f);
         const bool had_outer_row = row_.active;
         const RowState outer_row = row_;
+        const std::size_t content_cmd_begin = commands_.size();
 
         scope_stack_.push_back(ScopeState{
             ScopeKind::DropdownBody,
@@ -1936,6 +2036,17 @@ public:
             outer_row,
             false,
             -1,
+            0u,
+            Rect{},
+            0.0f,
+            false,
+            reveal,
+            body_glow.outer_cmd_index,
+            body_glow.inner_cmd_index,
+            body_glow.outer_spread,
+            body_glow.inner_spread,
+            content_cmd_begin,
+            true,
         });
         content_x_ = body.x + padding;
         content_width_ = std::max(10.0f, body.w - 2.0f * padding);
@@ -2058,6 +2169,26 @@ struct TextAreaState {
         float content_height{0.0f};
     };
 
+    struct MotionState {
+        float hover{0.0f};
+        float press{0.0f};
+        float focus{0.0f};
+        float active{0.0f};
+        float value{0.0f};
+        bool initialized{false};
+        bool value_initialized{false};
+        std::uint64_t last_touched_frame{0u};
+    };
+
+    static constexpr std::size_t k_invalid_command_index = static_cast<std::size_t>(-1);
+
+    struct GlowCommandRange {
+        std::size_t outer_cmd_index{k_invalid_command_index};
+        std::size_t inner_cmd_index{k_invalid_command_index};
+        float outer_spread{0.0f};
+        float inner_spread{0.0f};
+    };
+
     struct ScopeState {
         ScopeKind kind{ScopeKind::Card};
         float content_x{0.0f};
@@ -2076,6 +2207,13 @@ struct TextAreaState {
         Rect scroll_viewport{};
         float scroll_content_origin_y{0.0f};
         bool pushed_clip{false};
+        float reveal{1.0f};
+        std::size_t glow_outer_cmd_index{k_invalid_command_index};
+        std::size_t glow_inner_cmd_index{k_invalid_command_index};
+        float glow_outer_spread{0.0f};
+        float glow_inner_spread{0.0f};
+        std::size_t content_cmd_begin{0u};
+        bool show_content{true};
     };
 
     static std::uint64_t hash_sv(std::string_view text) {
@@ -2126,9 +2264,21 @@ struct TextAreaState {
         hash = hash_mix(hash, static_cast<std::uint64_t>(cmd.align));
         hash = hash_mix(hash, static_cast<std::uint64_t>(float_bits(cmd.radius)));
         hash = hash_mix(hash, static_cast<std::uint64_t>(float_bits(cmd.thickness)));
+        hash = hash_mix(hash, static_cast<std::uint64_t>(float_bits(cmd.rotation)));
         hash = hash_mix(hash, static_cast<std::uint64_t>(cmd.has_clip ? 1u : 0u));
         if (cmd.has_clip) {
             hash = hash_mix(hash, hash_rect(cmd.clip_rect));
+        }
+        return hash;
+    }
+
+    std::uint64_t hash_command(const DrawCommand& cmd) const {
+        std::uint64_t hash = hash_command_base(cmd);
+        if (cmd.type == CommandType::Text &&
+            static_cast<std::size_t>(cmd.text_offset) + static_cast<std::size_t>(cmd.text_length) <= text_arena_.size()) {
+            const std::string_view text(text_arena_.data() + cmd.text_offset, cmd.text_length);
+            hash = hash_mix(hash, hash_sv(text));
+            hash = hash_mix(hash, static_cast<std::uint64_t>(cmd.text_length));
         }
         return hash;
     }
@@ -2184,6 +2334,189 @@ struct TextAreaState {
         }
         out = Rect{x1, y1, x2 - x1, y2 - y1};
         return true;
+    }
+
+    static Rect expand_rect(const Rect& rect, float dx, float dy) {
+        return Rect{
+            rect.x - dx,
+            rect.y - dy,
+            rect.w + dx * 2.0f,
+            rect.h + dy * 2.0f,
+        };
+    }
+
+    static Rect translate_rect(const Rect& rect, float dx, float dy) {
+        if (std::fabs(dx) < 0.15f && std::fabs(dy) < 0.15f) {
+            return rect;
+        }
+        return Rect{
+            rect.x + dx,
+            rect.y + dy,
+            rect.w,
+            rect.h,
+        };
+    }
+
+    static Rect scale_rect_from_center(const Rect& rect, float scale_x, float scale_y) {
+        const float clamped_scale_x = std::max(0.1f, scale_x);
+        const float clamped_scale_y = std::max(0.1f, scale_y);
+        if (std::fabs(clamped_scale_x - 1.0f) < 0.0035f && std::fabs(clamped_scale_y - 1.0f) < 0.0035f) {
+            return rect;
+        }
+        const float new_w = rect.w * clamped_scale_x;
+        const float new_h = rect.h * clamped_scale_y;
+        return Rect{
+            rect.x + (rect.w - new_w) * 0.5f,
+            rect.y + (rect.h - new_h) * 0.5f,
+            new_w,
+            new_h,
+        };
+    }
+
+    static Color scale_alpha(const Color& color, float factor) {
+        return Color{
+            color.r,
+            color.g,
+            color.b,
+            std::clamp(color.a * factor, 0.0f, 1.0f),
+        };
+    }
+
+    static float snap_visual_motion(float value, float step = 1.0f / 48.0f) {
+        const float clamped = std::clamp(value, 0.0f, 1.0f);
+        if (step <= 1e-6f) {
+            return clamped;
+        }
+        if (clamped <= step * 0.5f) {
+            return 0.0f;
+        }
+        if (clamped >= 1.0f - step * 0.5f) {
+            return 1.0f;
+        }
+        return std::round(clamped / step) * step;
+    }
+
+    static bool near_value(float lhs, float rhs = 0.0f, float epsilon = 1e-3f) {
+        return std::fabs(lhs - rhs) <= epsilon;
+    }
+
+    std::uint64_t motion_id(std::string_view label, const Rect& rect, std::uint64_t salt) const {
+        return hash_mix(hash_mix(id_for(label), hash_rect(rect)), salt);
+    }
+
+    std::uint64_t motion_id(std::uint64_t base, std::uint64_t salt) const {
+        return hash_mix(base, salt);
+    }
+
+    MotionState& touch_motion_state(std::uint64_t id) {
+        MotionState& state = motion_states_[id];
+        state.last_touched_frame = motion_frame_id_;
+        return state;
+    }
+
+    float animate_motion_channel(float current, float target, float speed) {
+        if (near_value(current, target, 1.5e-3f)) {
+            return target;
+        }
+        const float blend = 1.0f - std::exp(-std::max(0.0f, speed) * ui_dt_);
+        const float next = current + (target - current) * blend;
+        if (!near_value(next, current, 3e-4f) || !near_value(next, target, 2.0e-3f)) {
+            repaint_requested_ = true;
+        }
+        return near_value(next, target, 1.5e-3f) ? target : next;
+    }
+
+    MotionState& update_motion_state(std::uint64_t id, bool hovered, bool pressed, bool focused = false,
+                                     bool active = false) {
+        MotionState& state = touch_motion_state(id);
+        const float hover_target = hovered ? 1.0f : 0.0f;
+        const float press_target = pressed ? 1.0f : 0.0f;
+        const float focus_target = focused ? 1.0f : 0.0f;
+        const float active_target = active ? 1.0f : 0.0f;
+        if (!state.initialized) {
+            state.hover = hover_target;
+            state.press = press_target;
+            state.focus = focus_target;
+            state.active = active_target;
+            state.initialized = true;
+            return state;
+        }
+        state.hover = animate_motion_channel(state.hover, hover_target, hovered ? 18.0f : 12.0f);
+        state.press = animate_motion_channel(state.press, press_target, pressed ? 28.0f : 18.0f);
+        state.focus = animate_motion_channel(state.focus, focus_target, focused ? 16.0f : 11.0f);
+        state.active = animate_motion_channel(state.active, active_target, active ? 14.0f : 10.0f);
+        return state;
+    }
+
+    float update_motion_value(std::uint64_t id, float target, float speed = 10.0f) {
+        MotionState& state = touch_motion_state(id);
+        if (!state.value_initialized) {
+            state.value = target;
+            state.value_initialized = true;
+            return target;
+        }
+        state.value = animate_motion_channel(state.value, target, speed);
+        return state.value;
+    }
+
+    void prune_motion_states() {
+        for (auto it = motion_states_.begin(); it != motion_states_.end();) {
+            const std::uint64_t age = motion_frame_id_ - it->second.last_touched_frame;
+            const bool settled = near_value(it->second.hover) && near_value(it->second.press) &&
+                                 near_value(it->second.focus) && near_value(it->second.active) &&
+                                 (!it->second.value_initialized || near_value(it->second.value));
+            if (age > 300u || (age > 96u && settled)) {
+                it = motion_states_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    GlowCommandRange add_soft_glow_tracked(const Rect& rect, const Color& color, float radius, float intensity,
+                                           float spread = 8.0f) {
+        GlowCommandRange range{};
+        const float glow = std::clamp(intensity, 0.0f, 1.0f);
+        const float area = std::max(0.0f, rect.w) * std::max(0.0f, rect.h);
+        const float inner_alpha = 0.08f * glow * color.a;
+        const float outer_alpha = 0.035f * glow * color.a;
+        if (glow <= 1e-3f || color.a <= 1e-3f || (inner_alpha < 0.010f && outer_alpha < 0.006f)) {
+            return range;
+        }
+        const bool allow_outer = outer_alpha >= 0.010f && area < 22000.0f && spread >= 4.0f;
+        range.inner_spread = spread * (0.30f + glow * 0.28f);
+        range.outer_spread = spread * (0.72f + glow * 0.48f);
+        if (allow_outer) {
+            range.outer_cmd_index = commands_.size();
+            add_filled_rect(expand_rect(rect, range.outer_spread, range.outer_spread),
+                            scale_alpha(color, 0.030f * glow), radius + range.outer_spread);
+        }
+        range.inner_cmd_index = commands_.size();
+        add_filled_rect(expand_rect(rect, range.inner_spread, range.inner_spread),
+                        scale_alpha(color, 0.074f * glow), radius + range.inner_spread);
+        return range;
+    }
+
+    void add_soft_glow(const Rect& rect, const Color& color, float radius, float intensity, float spread = 8.0f) {
+        (void)add_soft_glow_tracked(rect, color, radius, intensity, spread);
+    }
+
+    void draw_input_chrome(std::uint64_t id, const Rect& rect, bool hovered, bool focused, const Color& base_fill,
+                           float radius, float base_thickness = 1.0f) {
+        MotionState& motion = update_motion_state(id, hovered, false, focused, focused);
+        const float hover_v = snap_visual_motion(motion.hover, 1.0f / 40.0f);
+        const float focus_v = snap_visual_motion(motion.focus, 1.0f / 40.0f);
+        const float glow = focus_v * 0.78f + hover_v * 0.06f;
+        if (glow > 0.045f) {
+            add_soft_glow(rect, theme_.primary, radius, glow, 7.0f);
+        }
+        const Color fill =
+            mix(base_fill, mix(theme_.secondary, theme_.primary, 0.14f), hover_v * 0.08f + focus_v * 0.10f);
+        const Color border =
+            mix(theme_.input_border, theme_.focus_ring, focus_v * 0.92f + hover_v * 0.24f);
+        const float thickness = base_thickness + focus_v * 0.80f + hover_v * 0.06f;
+        add_filled_rect(rect, fill, radius);
+        add_outline_rect(rect, border, radius, thickness);
     }
 
     bool resolve_effective_clip(const Rect* requested_clip, Rect& out_clip, bool& has_clip) const {
@@ -3269,33 +3602,70 @@ struct TextAreaState {
         scope_stack_.pop_back();
 
         if (scope.kind == ScopeKind::Card || scope.kind == ScopeKind::DropdownBody) {
+            if (scope.pushed_clip) {
+                pop_clip_rect();
+            }
             const float needed_height = std::max(0.0f, (cursor_y_ - scope.top_y) + scope.padding);
             const float final_height = std::max(scope.min_height, needed_height);
+            const float display_height = final_height;
+            const bool animate_dropdown = scope.kind == ScopeKind::DropdownBody;
+            const float reveal = animate_dropdown ? std::clamp(scope.reveal, 0.0f, 1.0f) : 1.0f;
+            const float reveal_alpha =
+                animate_dropdown ? (1.0f - (1.0f - reveal) * (1.0f - reveal)) : 1.0f;
+            const float shell_offset_y = animate_dropdown ? (1.0f - reveal) * 8.0f : 0.0f;
+            const float content_offset_y = animate_dropdown ? (1.0f - reveal) * 10.0f : 0.0f;
+            const float content_alpha = animate_dropdown ? std::clamp(0.08f + reveal_alpha * 0.92f, 0.0f, 1.0f)
+                                                         : 1.0f;
             if (scope.fill_cmd_index < commands_.size()) {
-                commands_[scope.fill_cmd_index].rect.h = final_height;
-                commands_[scope.fill_cmd_index].hash = hash_command_base(commands_[scope.fill_cmd_index]);
+                commands_[scope.fill_cmd_index].rect.y = scope.top_y + shell_offset_y;
+                commands_[scope.fill_cmd_index].rect.h = display_height;
+                commands_[scope.fill_cmd_index].hash = hash_command(commands_[scope.fill_cmd_index]);
             }
             if (scope.outline_cmd_index < commands_.size()) {
-                commands_[scope.outline_cmd_index].rect.h = final_height;
-                commands_[scope.outline_cmd_index].hash = hash_command_base(commands_[scope.outline_cmd_index]);
+                commands_[scope.outline_cmd_index].rect.y = scope.top_y + shell_offset_y;
+                commands_[scope.outline_cmd_index].rect.h = display_height;
+                commands_[scope.outline_cmd_index].hash = hash_command(commands_[scope.outline_cmd_index]);
             }
-
+            if (scope.glow_outer_cmd_index != k_invalid_command_index && scope.glow_outer_cmd_index < commands_.size()) {
+                commands_[scope.glow_outer_cmd_index].rect.y =
+                    scope.top_y + shell_offset_y - scope.glow_outer_spread;
+                commands_[scope.glow_outer_cmd_index].rect.h = display_height + scope.glow_outer_spread * 2.0f;
+                commands_[scope.glow_outer_cmd_index].hash = hash_command(commands_[scope.glow_outer_cmd_index]);
+            }
+            if (scope.glow_inner_cmd_index != k_invalid_command_index && scope.glow_inner_cmd_index < commands_.size()) {
+                commands_[scope.glow_inner_cmd_index].rect.y =
+                    scope.top_y + shell_offset_y - scope.glow_inner_spread;
+                commands_[scope.glow_inner_cmd_index].rect.h = display_height + scope.glow_inner_spread * 2.0f;
+                commands_[scope.glow_inner_cmd_index].hash = hash_command(commands_[scope.glow_inner_cmd_index]);
+            }
+            if (animate_dropdown && (content_offset_y > 1e-3f || content_alpha < 0.999f) &&
+                scope.content_cmd_begin < commands_.size()) {
+                for (std::size_t i = scope.content_cmd_begin; i < commands_.size(); ++i) {
+                    DrawCommand& cmd = commands_[i];
+                    cmd.rect.y += content_offset_y;
+                    cmd.color = scale_alpha(cmd.color, content_alpha);
+                    if (cmd.has_clip) {
+                        cmd.clip_rect.y += content_offset_y;
+                    }
+                    cmd.hash = hash_command(cmd);
+                }
+            }
             content_x_ = scope.content_x;
             content_width_ = scope.content_width;
             if (scope.in_waterfall && waterfall_.active && scope.column_index >= 0 &&
                 scope.column_index < static_cast<int>(waterfall_.column_y.size())) {
                 waterfall_.column_y[static_cast<std::size_t>(scope.column_index)] =
-                    scope.top_y + final_height + item_spacing_;
+                    scope.top_y + display_height + item_spacing_;
                 cursor_y_ = waterfall_.start_y;
             } else if (scope.had_outer_row) {
                 row_ = scope.outer_row;
-                row_.max_height = std::max(row_.max_height, final_height);
+                row_.max_height = std::max(row_.max_height, display_height);
                 cursor_y_ = row_.y;
                 if (row_.index >= row_.columns) {
                     flush_row();
                 }
             } else {
-                cursor_y_ = scope.top_y + final_height + item_spacing_;
+                cursor_y_ = scope.top_y + display_height + item_spacing_;
             }
             return;
         }
@@ -3386,7 +3756,10 @@ struct TextAreaState {
         DrawCommand cmd;
         cmd.type = CommandType::FilledRect;
         cmd.rect = rect;
-        cmd.color = color;
+        cmd.color = scale_alpha(color, global_alpha_);
+        if (cmd.color.a <= 1e-4f) {
+            return;
+        }
         cmd.radius = std::max(0.0f, radius);
         if (!apply_clip_to_command(cmd, nullptr)) {
             return;
@@ -3400,7 +3773,10 @@ struct TextAreaState {
         DrawCommand cmd;
         cmd.type = CommandType::RectOutline;
         cmd.rect = rect;
-        cmd.color = color;
+        cmd.color = scale_alpha(color, global_alpha_);
+        if (cmd.color.a <= 1e-4f) {
+            return;
+        }
         cmd.radius = std::max(0.0f, radius);
         cmd.thickness = std::max(1.0f, thickness);
         if (!apply_clip_to_command(cmd, nullptr)) {
@@ -3415,7 +3791,10 @@ struct TextAreaState {
         DrawCommand cmd;
         cmd.type = CommandType::Text;
         cmd.rect = rect;
-        cmd.color = color;
+        cmd.color = scale_alpha(color, global_alpha_);
+        if (cmd.color.a <= 1e-4f || text.empty()) {
+            return;
+        }
         cmd.font_size = std::max(8.0f, font_size);
         cmd.align = align;
         if (!apply_clip_to_command(cmd, clip_rect)) {
@@ -3429,6 +3808,23 @@ struct TextAreaState {
         cmd.text_length = length;
         cmd.hash = hash_mix(hash_command_base(cmd), hash_sv(text));
         cmd.hash = hash_mix(cmd.hash, static_cast<std::uint64_t>(length));
+        commands_.push_back(std::move(cmd));
+    }
+
+    void add_chevron(const Rect& rect, const Color& color, float rotation, float thickness = 1.8f) {
+        DrawCommand cmd;
+        cmd.type = CommandType::Chevron;
+        cmd.rect = rect;
+        cmd.color = scale_alpha(color, global_alpha_);
+        if (cmd.color.a <= 1e-4f) {
+            return;
+        }
+        cmd.rotation = rotation;
+        cmd.thickness = std::max(1.0f, thickness);
+        if (!apply_clip_to_command(cmd, nullptr)) {
+            return;
+        }
+        cmd.hash = hash_command_base(cmd);
         commands_.push_back(std::move(cmd));
     }
 
@@ -3492,10 +3888,13 @@ struct TextAreaState {
     mutable std::unordered_map<std::string, StbMeasureFont> stb_measure_fonts_{};
 #endif
     bool repaint_requested_{false};
+    float global_alpha_{1.0f};
     bool clipboard_write_pending_{false};
     std::string clipboard_write_text_{};
     std::unordered_map<std::uint64_t, TextAreaState> text_area_state_{};
     std::unordered_map<std::uint64_t, ScrollAreaState> scroll_area_state_{};
+    std::unordered_map<std::uint64_t, MotionState> motion_states_{};
+    std::uint64_t motion_frame_id_{0u};
     std::vector<Rect> clip_stack_{};
     Rect panel_rect_{};
 };
@@ -3932,6 +4331,7 @@ inline void draw_cache_texture(const RuntimeState& runtime, int width, int heigh
 
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_BLEND);
+    glDisable(GL_MULTISAMPLE);
     glDisable(GL_SCISSOR_TEST);
     glEnable(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, runtime.cache_texture);
@@ -5882,6 +6282,28 @@ public:
             }
         };
 
+        auto append_chevron = [&](const DrawCommand& cmd) {
+            const float cx = cmd.rect.x + cmd.rect.w * 0.5f;
+            const float cy = cmd.rect.y + cmd.rect.h * 0.5f;
+            const float half_w = std::max(2.0f, cmd.rect.w * 0.34f);
+            const float half_h = std::max(2.0f, cmd.rect.h * 0.28f);
+            const float cos_a = std::cos(cmd.rotation);
+            const float sin_a = std::sin(cmd.rotation);
+            auto rotate_point = [&](float x, float y) -> Point {
+                return Point{
+                    cx + x * cos_a - y * sin_a,
+                    cy + x * sin_a + y * cos_a,
+                };
+            };
+            const Point p0 = rotate_point(-half_w, -half_h);
+            const Point p1 = rotate_point(half_w, 0.0f);
+            const Point p2 = rotate_point(-half_w, half_h);
+            push_colored_vertex(outline_batch, p0[0], p0[1], cmd.color);
+            push_colored_vertex(outline_batch, p1[0], p1[1], cmd.color);
+            push_colored_vertex(outline_batch, p1[0], p1[1], cmd.color);
+            push_colored_vertex(outline_batch, p2[0], p2[1], cmd.color);
+        };
+
         auto flush_filled_batch = [&]() {
             if (filled_batch.empty()) {
                 return;
@@ -5981,6 +6403,19 @@ public:
                         pending_outline_thickness = std::max(1.0f, cmd.thickness);
                     }
                     append_outline_rect(cmd);
+                    break;
+                case CommandType::Chevron:
+                    if (!scissor_matches(desired_clip)) {
+                        flush_pending_batch();
+                        apply_scissor(desired_clip);
+                    }
+                    if (pending_batch != PendingBatch::Outline ||
+                        !float_eq(pending_outline_thickness, std::max(1.0f, cmd.thickness), 1e-3f)) {
+                        flush_pending_batch();
+                        pending_batch = PendingBatch::Outline;
+                        pending_outline_thickness = std::max(1.0f, cmd.thickness);
+                    }
+                    append_chevron(cmd);
                     break;
                 case CommandType::Text: {
                     flush_pending_batch();
@@ -6366,8 +6801,20 @@ int run(BuildUiFn&& build_ui, const AppOptions& options = {}) {
                 detail::compute_dirty_regions(commands, text_arena, runtime, bg, framebuffer_w, framebuffer_h,
                                               force_full_redraw, runtime.dirty_regions);
         }
+        bool prefer_full_redraw = false;
+        if (!force_full_redraw && has_dirty) {
+            float dirty_area = 0.0f;
+            for (const Rect& dirty : runtime.dirty_regions) {
+                dirty_area += std::max(0.0f, dirty.w) * std::max(0.0f, dirty.h);
+            }
+            const float framebuffer_area =
+                std::max(1.0f, static_cast<float>(framebuffer_w) * static_cast<float>(framebuffer_h));
+            prefer_full_redraw =
+                runtime.dirty_regions.size() >= 6u || dirty_area >= framebuffer_area * 0.58f;
+        }
+        const bool use_full_redraw = force_full_redraw || prefer_full_redraw;
 
-        if (!force_full_redraw && !has_dirty) {
+        if (!use_full_redraw && !has_dirty) {
             runtime.prev_commands.swap(runtime.curr_commands);
             runtime.prev_text_arena.swap(runtime.curr_text_arena);
             runtime.prev_bg = bg;
@@ -6380,7 +6827,7 @@ int run(BuildUiFn&& build_ui, const AppOptions& options = {}) {
             continue;
         }
 
-        if (force_full_redraw) {
+        if (use_full_redraw) {
             glDisable(GL_SCISSOR_TEST);
             glClearColor(bg.r, bg.g, bg.b, bg.a);
             glClear(GL_COLOR_BUFFER_BIT);

@@ -191,7 +191,7 @@ static void draw_stats_row(eui::Context& ui, float scale, float progress) {
     auto stat_card = [&](const char* title, const char* value, const char* note, const char* icon) {
         ui.begin_card("", dp(124.0f), dp(10.0f));
         ui.begin_row(12, dp(6.0f));
-        ui.set_next_item_span(9);
+        ui.set_next_item_span(10);
         ui.label(title, dp(12.0f), true, dp(22.0f));
         ui.set_next_item_span(3);
         ui.label(icon, dp(13.0f), true, dp(22.0f));

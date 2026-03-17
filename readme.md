@@ -6,6 +6,8 @@ EUI is a lightweight, header-only C++ UI toolkit focused on practical immediate-
 The core API in `include/EUI.h` generates draw commands only.
 A GLFW + OpenGL demo runtime is available when `EUI_ENABLE_GLFW_OPENGL_BACKEND` is enabled.
 It now includes a more complete text pipeline for mixed text/icon rendering, editable inputs, and scrolling text areas.
+Major widgets also include built-in lightweight motion feedback for hover, press, focus, dropdown reveal, and progress changes.
+The current motion defaults are tuned to stay compatible with event-driven rendering and restrained GPU usage.
 
 ## Preview
 
@@ -55,8 +57,11 @@ It now includes a more complete text pipeline for mixed text/icon rendering, edi
 - Frame hash early-out to avoid redundant GPU work.
 - Dirty-region diff between previous and current draw command streams.
 - Cached framebuffer texture + partial redraw via scissor.
+- Large dirty-area changes fall back to full redraw instead of forcing cache replay + many partial updates.
 - Clip stack + command clipping in core.
 - Tile-assisted command bucketing for large command counts.
+- Motion states only request redraw while hover/focus/press/value animations are still settling.
+- Weak glows are culled early, large surfaces stay static, and tiny motion deltas snap to rest quickly.
 
 ### 4) Text / Editing Model
 
@@ -101,6 +106,11 @@ It now includes a more complete text pipeline for mixed text/icon rendering, edi
   - drag, wheel, inertia, overscroll bounce, scrollbar options
 - `text_area` (editable, selection, caret, scrolling)
 - `text_area_readonly`
+- Built-in control motion
+  - subtle button/tab press motion
+  - restrained input focus ring and glow
+  - dropdown reveal with rotating chevron
+  - slider/thumb, scrollbar thumb, and progress fill easing
 
 ### Output / Integration
 
@@ -120,7 +130,8 @@ EUI/
 |  |- basic_demo.cpp
 |  |- calculator_demo.cpp
 |  |- minimal_demo.cpp
-|  `- layout_examples_demo.cpp
+|  |- layout_examples_demo.cpp
+|  `- sidebar_navigation_demo.cpp
 |- CMakeLists.txt
 |- index.html
 |- readme.md
@@ -155,6 +166,7 @@ When OpenGL + GLFW are available, CMake creates:
 - `eui_calculator_demo` (`examples/calculator_demo.cpp`)
 - `eui_layout_examples_demo` (`examples/layout_examples_demo.cpp`)
 - `eui_minimal_demo` (`examples/minimal_demo.cpp`)
+- `eui_sidebar_navigation_demo` (`examples/sidebar_navigation_demo.cpp`)
 
 Important options:
 
@@ -186,6 +198,9 @@ cmake --build build --target eui_layout_examples_demo
 
 # minimal demo
 cmake --build build --target eui_minimal_demo
+
+# sidebar navigation demo
+cmake --build build --target eui_sidebar_navigation_demo
 ```
 
 ## Minimal Core Usage
@@ -233,6 +248,7 @@ const auto& text_arena = ui.text_arena();
 - For left-aligned sidebar buttons, prefix label with `\t` to enable left align with built-in left padding.
 - For icon + text, use **two ASCII spaces** between them (for example `u8"\uF015  Dashboard"`).
 - EUI will split icon/text and render them separately, which keeps vertical alignment stable.
+- See `examples/sidebar_navigation_demo.cpp` for a minimal left-sidebar + page-transition sample.
 
 ```cpp
 // Left-aligned nav item with icon + text (stable vertical centering)

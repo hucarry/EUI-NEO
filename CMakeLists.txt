@@ -118,6 +118,15 @@ if(EUI_BUILD_EXAMPLES)
         else()
             target_compile_options(eui_minimal_demo PRIVATE -Wall -Wextra -Wpedantic)
         endif()
+
+        add_executable(eui_sidebar_navigation_demo WIN32 examples/sidebar_navigation_demo.cpp)
+        target_link_libraries(eui_sidebar_navigation_demo PRIVATE EUI::eui ${EUI_GLFW_TARGET} ${EUI_OPENGL_TARGET})
+        target_compile_definitions(eui_sidebar_navigation_demo PRIVATE EUI_ENABLE_GLFW_OPENGL_BACKEND=1)
+        if(MSVC)
+            target_compile_options(eui_sidebar_navigation_demo PRIVATE /W4)
+        else()
+            target_compile_options(eui_sidebar_navigation_demo PRIVATE -Wall -Wextra -Wpedantic)
+        endif()
     elseif(NOT EUI_OPENGL_TARGET)
         message(WARNING
             "Skipping eui_demo: OpenGL library not found on this platform."

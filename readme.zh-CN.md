@@ -6,6 +6,8 @@ EUI 是一个轻量、头文件式（header-only）的 C++ UI 工具包，偏重
 核心 API 在 `include/EUI.h` 中，只负责产出绘制命令。
 当启用 `EUI_ENABLE_GLFW_OPENGL_BACKEND` 时，可使用内置的 GLFW + OpenGL demo 运行时。
 当前版本已经补齐了更完整的文本链路，覆盖混合文本/图标渲染、可编辑输入框和可滚动文本编辑框。
+目前主要控件也已经内置了轻量动效，覆盖悬停、按下、聚焦、下拉展开和进度变化等状态反馈。
+当前默认动效也专门做过收敛，尽量兼容事件驱动渲染和更低的 GPU 占用。
 
 ## 预览
 
@@ -55,8 +57,11 @@ EUI 是一个轻量、头文件式（header-only）的 C++ UI 工具包，偏重
 - 帧级 hash 快速早退，避免无意义 GPU 重绘。
 - 前后帧命令差异计算脏区。
 - 缓存帧缓冲纹理 + 脏区局部刷新。
+- 脏区过大时会直接回退为整帧重绘，避免缓存回放和过多局部重绘叠加。
 - Core 层有 clip stack 与命令级裁剪。
 - 命令量较大时启用基于 tile 的命令分桶。
+- 动画状态只有在尚未收敛时才会继续请求重绘，尽量不破坏事件驱动渲染收益。
+- 很弱的辉光会被提前裁掉，大面积表面保持静态，微小动效变化也会更快收敛。
 
 ### 4）文本与编辑模型
 
@@ -101,6 +106,11 @@ EUI 是一个轻量、头文件式（header-only）的 C++ UI 工具包，偏重
   - 支持拖拽、滚轮、惯性、回弹、滚动条参数
 - `text_area`（可编辑、可选择、光标、滚动）
 - `text_area_readonly`
+- 内置控件动效
+  - 按钮 / Tab 的轻微按压反馈
+  - 输入框聚焦时的柔和描边与克制辉光
+  - 下拉框展开与箭头旋转
+  - Slider、滚动条滑块、Progress 填充的缓动反馈
 
 ### 输出与集成
 
@@ -120,7 +130,8 @@ EUI/
 |  |- basic_demo.cpp
 |  |- calculator_demo.cpp
 |  |- minimal_demo.cpp
-|  `- layout_examples_demo.cpp
+|  |- layout_examples_demo.cpp
+|  `- sidebar_navigation_demo.cpp
 |- CMakeLists.txt
 |- index.html
 |- readme.md
@@ -155,6 +166,7 @@ cmake --build build
 - `eui_calculator_demo`（`examples/calculator_demo.cpp`）
 - `eui_layout_examples_demo`（`examples/layout_examples_demo.cpp`）
 - `eui_minimal_demo`（`examples/minimal_demo.cpp`）
+- `eui_sidebar_navigation_demo`（`examples/sidebar_navigation_demo.cpp`）
 
 重要 CMake 选项：
 
@@ -186,6 +198,9 @@ cmake --build build --target eui_layout_examples_demo
 
 # 极简 demo
 cmake --build build --target eui_minimal_demo
+
+# 侧边栏导航 demo
+cmake --build build --target eui_sidebar_navigation_demo
 ```
 
 ## 核心最小用法
@@ -233,6 +248,7 @@ const auto& text_arena = ui.text_arena();
 - 侧边栏按钮如果需要左对齐，请在 `label` 前加 `\t`，会启用左对齐并带左侧内边距。
 - 图标 + 文本请使用 **两个 ASCII 空格** 分隔（例如 `u8"\uF015  Dashboard"`）。
 - EUI 会把图标和文本拆开分别渲染，垂直居中会稳定很多。
+- 想看完整的极简侧边栏 + 页面切换示例，可直接参考 `examples/sidebar_navigation_demo.cpp`。
 
 ```cpp
 // 左对齐侧边栏项：图标 + 文本，垂直居中更稳定
