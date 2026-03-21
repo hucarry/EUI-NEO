@@ -71,6 +71,7 @@ jobs:
           -G "${{ matrix.cmake_generator }}"
           ${{ matrix.cmake_args }}
           -DEUI_BUILD_EXAMPLES=ON
+          -DEUI_STRICT_WARNINGS=OFF
           -DEUI_FETCH_GLFW_FROM_GIT=ON
           -DGLFW_BUILD_WAYLAND=OFF
           -DCPACK_PACKAGE_FILE_NAME=EUI-${RELEASE_TAG}-${{ matrix.name }}

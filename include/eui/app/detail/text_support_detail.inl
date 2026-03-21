@@ -93,7 +93,6 @@ inline bool utf8_next(std::string_view text, std::size_t& index, std::uint32_t& 
 }
 
 #endif
-#endif
 
 #ifdef _WIN32
 inline std::wstring utf8_to_wide(std::string_view text) {
@@ -163,4 +162,6 @@ inline bool utf8_next(std::string_view text, std::size_t& index, std::uint32_t& 
     index += 1u;
     return true;
 }
+
+#endif
 

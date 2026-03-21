@@ -176,6 +176,12 @@
 #ifdef _MSC_VER
 #pragma warning(push)
 #pragma warning(disable : 4505)
+#elif defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-function"
+#elif defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
 #endif
 #ifndef STBTT_STATIC
 #define STBTT_STATIC
@@ -188,6 +194,10 @@
 #include "stb_truetype.h"
 #ifdef _MSC_VER
 #pragma warning(pop)
+#elif defined(__clang__)
+#pragma clang diagnostic pop
+#elif defined(__GNUC__)
+#pragma GCC diagnostic pop
 #endif
 #ifdef EUI_UNDEF_STBTT_IMPLEMENTATION
 #undef STB_TRUETYPE_IMPLEMENTATION
