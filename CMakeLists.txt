@@ -1,109 +1,89 @@
-cmake_minimum_required(VERSION 3.20)
-project(EUI VERSION 0.1.0 LANGUAGES C CXX)
+cmake_minimum_required(VERSION 3.14)
+project(EUI-NEO VERSION 1.0)
 
-include(GNUInstallDirs)
-include(CMakePackageConfigHelpers)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED True)
 
-option(EUI_BUILD_EXAMPLES "Build example applications when dependencies exist" ON)
-option(EUI_STRICT_WARNINGS "Enable strict warnings on local targets" ON)
-set(EUI_WINDOW_BACKEND "AUTO" CACHE STRING "Convenience window backend mode: AUTO, GLFW, SDL2, or ALL")
-set_property(CACHE EUI_WINDOW_BACKEND PROPERTY STRINGS AUTO GLFW SDL2 ALL)
-option(EUI_FETCH_GLFW_FROM_GIT "Auto-fetch GLFW from Git if it is not available locally" OFF)
-option(EUI_FETCH_SDL2_FROM_GIT "Auto-fetch SDL2 from Git if it is not available locally" OFF)
-option(EUI_ENABLE_GLFW_WINDOW_BACKEND "Enable GLFW window backend for app/examples when available" ON)
-option(EUI_ENABLE_SDL2_WINDOW_BACKEND "Enable SDL2 window backend for app/examples when available" ON)
-set(EUI_GLFW_GIT_TAG "3.4" CACHE STRING "GLFW Git tag used by FetchContent")
-set(EUI_SDL2_GIT_TAG "SDL2" CACHE STRING "SDL2 Git ref used by FetchContent")
+# 禁用 HTTPS 证书验证，解决国内或代理环境下下载 Github 源码失败的问题
+set(CMAKE_TLS_VERIFY OFF)
 
-if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+# 禁用 GLFW 测试、示例和文档以加快构建速度
+set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "Build the GLFW example programs" FORCE)
+set(GLFW_BUILD_TESTS OFF CACHE BOOL "Build the GLFW test programs" FORCE)
+set(GLFW_BUILD_DOCS OFF CACHE BOOL "Build the GLFW documentation" FORCE)
+set(GLFW_INSTALL OFF CACHE BOOL "Generate installation target" FORCE)
+
+# 使用 FetchContent 从 GitHub 源码库下载，避免直接下载 Releases 可能出现的跳转/损坏问题
+include(FetchContent)
+FetchContent_Declare(
+    glfw
+    URL https://github.com/glfw/glfw/archive/refs/tags/3.4.zip
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    TIMEOUT 30 # 设置30秒超时
+    TLS_VERIFY OFF # 解决 SSL 证书错误
+)
+
+# 强制 GLFW 构建为动态库 (DLL) 以节省内存
+set(BUILD_SHARED_LIBS ON CACHE BOOL "Build shared libraries" FORCE)
+set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "Build the GLFW example programs" FORCE)
+set(GLFW_BUILD_TESTS OFF CACHE BOOL "Build the GLFW test programs" FORCE)
+set(GLFW_BUILD_DOCS OFF CACHE BOOL "Build the GLFW documentation" FORCE)
+
+FetchContent_MakeAvailable(glfw)
+
+# GLAD 使用静态库编译，因为动态库在 MSVC 下如果不加 dllexport 会不生成 .lib
+# 这也是你之前遇到 LNK1181 无法打开 glad.lib 的原因
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build shared libraries" FORCE)
+
+# 获取预编译的 GLAD（用于访问可编程管线和现代 OpenGL 函数）
+FetchContent_Declare(
+    glad
+    URL https://github.com/libigl/libigl-glad/archive/refs/heads/master.zip
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    TIMEOUT 30 # 设置30秒超时
+    TLS_VERIFY OFF # 解决 SSL 证书错误
+)
+FetchContent_MakeAvailable(glad)
+
+# 自动检测并查找系统已安装的 OpenGL
+find_package(OpenGL REQUIRED)
+
+# 包含 src 目录和第三方库目录
+include_directories(src)
+include_directories(third_party)
+
+# 自动收集 src 下的所有 cpp 文件 (包含所有组件如 InputBox, ComboBox, Panel 等)
+file(GLOB_RECURSE SRC_FILES CONFIGURE_DEPENDS "src/*.cpp")
+
+# 添加可执行文件 (加入 EUINEO 和各个组件、页面)
+add_executable(eui_neo main.cpp ${SRC_FILES})
+
+# 压缩可执行文件大小和内存优化标志（针对 MSVC/GCC 等）
+if(MSVC)
+    # Release already gets /O2 from CMake; adding /O1 here only triggers D9025 and
+    # forces the slower size-focused optimizer. Keep the hardening/encoding flags only.
+    target_compile_options(eui_neo PRIVATE /GS- /sdl- /utf-8)
+    target_link_options(eui_neo PRIVATE /OPT:REF /OPT:ICF /ENTRY:mainCRTStartup /SUBSYSTEM:WINDOWS)
+else()
+    target_compile_options(eui_neo PRIVATE -Os -fno-exceptions -fno-rtti)
+    target_link_options(eui_neo PRIVATE -Wl,--gc-sections -s)
 endif()
 
-add_library(eui INTERFACE)
-add_library(EUI::eui ALIAS eui)
-target_include_directories(eui INTERFACE
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-    $<INSTALL_INTERFACE:include>
-)
-target_compile_features(eui INTERFACE cxx_std_17)
+# 链接依赖库
+target_link_libraries(eui_neo PRIVATE glfw glad OpenGL::GL)
+
+# 由于我们将 GLFW 编译为了动态库 (DLL)，在 Windows 下需要将其拷贝到可执行文件所在目录
 if(WIN32)
-    target_link_libraries(eui INTERFACE ole32 windowscodecs)
-endif()
-
-if(EUI_STRICT_WARNINGS)
-    if(MSVC)
-        target_compile_options(eui INTERFACE /W4)
-    else()
-        target_compile_options(eui INTERFACE -Wall -Wextra -Wpedantic)
-    endif()
-endif()
-
-set(EUI_INSTALL_CMAKEDIR "${CMAKE_INSTALL_LIBDIR}/cmake/EUI")
-
-set(EUI_DOC_FILES "")
-foreach(eui_doc_candidate
-    "${CMAKE_CURRENT_SOURCE_DIR}/readme.md"
-    "${CMAKE_CURRENT_SOURCE_DIR}/readme.zh-CN.md"
-    "${CMAKE_CURRENT_SOURCE_DIR}/README.md"
-    "${CMAKE_CURRENT_SOURCE_DIR}/README.zh-CN.md"
+    add_custom_command(TARGET eui_neo POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    $<TARGET_FILE:glfw>
+    $<TARGET_FILE_DIR:eui_neo>
 )
-    if(EXISTS "${eui_doc_candidate}")
-        list(APPEND EUI_DOC_FILES "${eui_doc_candidate}")
-    endif()
-endforeach()
-
-install(TARGETS eui EXPORT EUITargets)
-install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/include/" DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
-if(EUI_DOC_FILES)
-    install(FILES ${EUI_DOC_FILES} DESTINATION "${CMAKE_INSTALL_DOCDIR}")
-endif()
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/docs")
-    install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/docs/" DESTINATION "${CMAKE_INSTALL_DOCDIR}/docs")
-endif()
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/examples")
-    install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/examples/" DESTINATION "${CMAKE_INSTALL_DOCDIR}/examples")
 endif()
 
-configure_package_config_file(
-    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/EUIConfig.cmake.in"
-    "${CMAKE_CURRENT_BINARY_DIR}/EUIConfig.cmake"
-    INSTALL_DESTINATION "${EUI_INSTALL_CMAKEDIR}"
+# 将字体文件夹拷贝到可执行文件同级目录，以便单独运行 exe 时能找到字体
+add_custom_command(TARGET eui_neo POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/font
+    $<TARGET_FILE_DIR:eui_neo>/font
 )
-write_basic_package_version_file(
-    "${CMAKE_CURRENT_BINARY_DIR}/EUIConfigVersion.cmake"
-    VERSION "${PROJECT_VERSION}"
-    COMPATIBILITY SameMajorVersion
-)
-install(EXPORT EUITargets
-    FILE EUIConfigTargets.cmake
-    NAMESPACE EUI::
-    DESTINATION "${EUI_INSTALL_CMAKEDIR}"
-)
-install(FILES
-    "${CMAKE_CURRENT_BINARY_DIR}/EUIConfig.cmake"
-    "${CMAKE_CURRENT_BINARY_DIR}/EUIConfigVersion.cmake"
-    DESTINATION "${EUI_INSTALL_CMAKEDIR}"
-)
-
-if(EUI_BUILD_EXAMPLES)
-    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/EUIExamples.cmake")
-    eui_configure_examples()
-endif()
-
-set(CPACK_PACKAGE_NAME "EUI")
-set(CPACK_PACKAGE_VENDOR "EUI")
-set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Header-only immediate-mode C++ UI toolkit")
-set(CPACK_PACKAGE_INSTALL_DIRECTORY "EUI")
-set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
-set(EUI_CPACK_README "")
-foreach(eui_doc_candidate IN LISTS EUI_DOC_FILES)
-    set(EUI_CPACK_README "${eui_doc_candidate}")
-    break()
-endforeach()
-if(EUI_CPACK_README)
-    set(CPACK_RESOURCE_FILE_README "${EUI_CPACK_README}")
-endif()
-if(NOT DEFINED CPACK_PACKAGE_FILE_NAME)
-    set(CPACK_PACKAGE_FILE_NAME "${CPACK_PACKAGE_NAME}-${CPACK_PACKAGE_VERSION}-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}")
-endif()
-include(CPack)
