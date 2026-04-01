@@ -5,6 +5,19 @@
 #include <string>
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#define GLFW_EXPOSE_NATIVE_WIN32
+#include <GLFW/glfw3native.h>
+#include <windows.h>
+#include <imm.h>
+#pragma comment(lib, "imm32.lib")
+#endif
 #include "src/EUINEO.h"
 #include "src/pages/MainPage.h"
 
@@ -56,6 +69,48 @@ void UpdateMousePosition(double x, double y) {
     EUINEO::State.mouseY = nextY;
 }
 
+void UpdateImeCandidateWindow(GLFWwindow* window) {
+#if defined(_WIN32)
+    if (window == nullptr) {
+        return;
+    }
+    HWND hwnd = glfwGetWin32Window(window);
+    if (hwnd == nullptr) {
+        return;
+    }
+    HIMC imc = ImmGetContext(hwnd);
+    if (imc == nullptr) {
+        return;
+    }
+    if (EUINEO::State.imeCursorActive) {
+        const float scaleX = std::max(0.5f, EUINEO::State.dpiScaleX);
+        const float scaleY = std::max(0.5f, EUINEO::State.dpiScaleY);
+        const LONG caretX = static_cast<LONG>(std::lround(EUINEO::State.imeCursorX * scaleX));
+        const LONG caretTop = static_cast<LONG>(std::lround(EUINEO::State.imeCursorY * scaleY));
+        const LONG caretHeight = std::max<LONG>(1, static_cast<LONG>(std::lround(EUINEO::State.imeCursorH * scaleY)));
+        const LONG caretBottom = caretTop + caretHeight;
+        POINT point;
+        point.x = caretX;
+        point.y = caretBottom + 2;
+        COMPOSITIONFORM compositionForm{};
+        compositionForm.dwStyle = CFS_FORCE_POSITION;
+        compositionForm.ptCurrentPos = point;
+        ImmSetCompositionWindow(imc, &compositionForm);
+        CANDIDATEFORM candidateForm{};
+        candidateForm.dwStyle = CFS_EXCLUDE;
+        candidateForm.ptCurrentPos = point;
+        candidateForm.rcArea.left = caretX;
+        candidateForm.rcArea.top = caretTop;
+        candidateForm.rcArea.right = caretX + 2;
+        candidateForm.rcArea.bottom = caretBottom;
+        ImmSetCandidateWindow(imc, &candidateForm);
+    }
+    ImmReleaseContext(hwnd, imc);
+#else
+    (void)window;
+#endif
+}
+
 }
 
 int main() {
@@ -73,6 +128,7 @@ int main() {
     glfwWindowHint(GLFW_SCALE_TO_MONITOR, GLFW_TRUE);
 
     GLFWwindow* window = glfwCreateWindow(800, 600, "EUI-NEO", nullptr, nullptr);
+    EUINEO::ApplyDefaultWindowIcon(window, "docs/icon.svg");
     glfwMakeContextCurrent(window);
 
     glfwSetFramebufferSizeCallback(window, [](GLFWwindow* win, int w, int h) {
@@ -255,6 +311,7 @@ int main() {
             mainPage.Draw();
             glfwSwapBuffers(window);
         }
+        UpdateImeCandidateWindow(window);
 
         EUINEO::State.textInput.clear();
         EUINEO::State.scrollDeltaX = 0.0f;

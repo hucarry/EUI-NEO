@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AnimationPage.h"
+#include "AboutPage.h"
 #include "HomePage.h"
 #include "LayoutPage.h"
 #include "TypographyPage.h"
@@ -19,6 +20,7 @@ enum class MainPageView {
     Animation = 1,
     Layout = 2,
     Typography = 3,
+    About = 4,
 };
 
 class MainPage {
@@ -40,12 +42,18 @@ public:
         const std::uint64_t versionBeforeUpdate = stateVersion_;
         Compose();
         ui_.update();
+        if (hasPendingViewSwitch_) {
+            const MainPageView target = pendingView_;
+            hasPendingViewSwitch_ = false;
+            SwitchView(target);
+        }
         if (stateVersion_ != versionBeforeUpdate || ui_.consumeRecomposeRequest()) {
             Compose();
         }
     }
 
     void Draw() {
+        State.imeCursorActive = false;
         ui_.render();
     }
 
@@ -73,10 +81,11 @@ private:
             .layer(RenderLayer::Chrome)
             .brand("EUI", "NEO")
             .selectedIndex(static_cast<int>(currentView_))
-            .item("\xEF\x80\x95", "Home", [this] { SwitchView(MainPageView::Home); })
-            .item("\xEF\x81\x8B", "Animation", [this] { SwitchView(MainPageView::Animation); })
-            .item("\xEF\x80\x89", "Layout", [this] { SwitchView(MainPageView::Layout); })
-            .item("\xEF\x80\xB1", "Typography", [this] { SwitchView(MainPageView::Typography); })
+            .item("\xEF\x80\x95", "Home", [this] { QueueViewSwitch(MainPageView::Home); })
+            .item("\xEF\x81\x8B", "Animation", [this] { QueueViewSwitch(MainPageView::Animation); })
+            .item("\xEF\x80\x89", "Layout", [this] { QueueViewSwitch(MainPageView::Layout); })
+            .item("\xEF\x80\xB1", "Typography", [this] { QueueViewSwitch(MainPageView::Typography); })
+            .item("\xEF\x81\x9A", "About", [this] { QueueViewSwitch(MainPageView::About); })
             .themeToggle([this] { ToggleTheme(); })
             .build();
 
@@ -139,6 +148,14 @@ private:
         pageRevealDirection_ = nextIndex >= previousIndex ? 1 : -1;
         ++stateVersion_;
         ui_.requestVisualRefresh(0.18f);
+    }
+
+    void QueueViewSwitch(MainPageView view) {
+        if (hasPendingViewSwitch_ && pendingView_ == view) {
+            return;
+        }
+        pendingView_ = view;
+        hasPendingViewSwitch_ = true;
     }
 
     struct Layout {
@@ -212,6 +229,9 @@ private:
         }
         case MainPageView::Typography:
             TypographyPage::Compose(ui_, "typography.page", bounds);
+            break;
+        case MainPageView::About:
+            AboutPage::Compose(ui_, "about.page", bounds);
             break;
         }
     }
@@ -311,6 +331,8 @@ private:
     std::uint32_t randomSeed_ = 0xC0FFEE11u;
     int accentIndex_ = 0;
     std::uint64_t stateVersion_ = 0;
+    MainPageView pendingView_ = MainPageView::Home;
+    bool hasPendingViewSwitch_ = false;
 };
 
 } // namespace EUINEO

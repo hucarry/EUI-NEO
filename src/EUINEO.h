@@ -7,6 +7,8 @@
 #include <string>
 #include <vector>
 
+struct GLFWwindow;
+
 namespace EUINEO {
 
 struct Color {
@@ -300,6 +302,10 @@ struct UIState {
     bool scrollConsumed = false;
     bool pointerMoved = false;
     bool inputPriorityByZ = true;
+    bool imeCursorActive = false;
+    float imeCursorX = 0.0f;
+    float imeCursorY = 0.0f;
+    float imeCursorH = 0.0f;
 
     bool needsRepaint = true;
     float animationTimeLeft = 0.0f;
@@ -307,6 +313,9 @@ struct UIState {
 };
 
 extern UIState State;
+
+bool ApplyDefaultWindowIcon(GLFWwindow* window, const std::string& svgPath = "docs/icon.svg");
+bool OpenExternalUrl(const std::string& url);
 
 class Renderer {
 public:

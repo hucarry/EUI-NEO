@@ -3,6 +3,7 @@
 #include "ui/ThemeTokens.h"
 #include <GLFW/glfw3.h>
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -16,7 +17,8 @@
 #include <vector>
 #ifdef EUI_HAS_CURL
 #include <curl/curl.h>
-#elif defined(_WIN32)
+#endif
+#if defined(_WIN32)
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
@@ -28,7 +30,10 @@
 #ifdef _MSC_VER
 #pragma warning(pop)
 #endif
+#include <shellapi.h>
+#ifndef EUI_HAS_CURL
 #include <urlmon.h>
+#endif
 #endif
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -36,6 +41,11 @@
 
 #define STB_TRUETYPE_IMPLEMENTATION
 #include "stb_truetype.h"
+
+#define NANOSVG_IMPLEMENTATION
+#define NANOSVGRAST_IMPLEMENTATION
+#include "nanosvg.h"
+#include "nanosvgrast.h"
 
 namespace EUINEO {
 
@@ -880,6 +890,168 @@ static std::string ResolveImagePath(const std::string& path) {
     return {};
 }
 
+static bool HasSvgExtension(const std::string& path) {
+    if (path.size() < 4) {
+        return false;
+    }
+    const size_t dotPos = path.find_last_of('.');
+    if (dotPos == std::string::npos) {
+        return false;
+    }
+    std::string ext = path.substr(dotPos);
+    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    return ext == ".svg";
+}
+
+static bool RasterizeSvgFile(const std::string& path, int targetWidth, int targetHeight,
+                             bool flipVertically, std::vector<unsigned char>& outPixels,
+                             int& outWidth, int& outHeight) {
+    outPixels.clear();
+    outWidth = 0;
+    outHeight = 0;
+    if (targetWidth <= 0 || targetHeight <= 0) {
+        return false;
+    }
+
+    std::ifstream file(path, std::ios::binary);
+    if (!file.good()) {
+        return false;
+    }
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+    std::string svg = buffer.str();
+    if (svg.empty()) {
+        return false;
+    }
+    std::vector<char> svgBuffer(svg.begin(), svg.end());
+    svgBuffer.push_back('\0');
+
+    NSVGimage* image = nsvgParse(svgBuffer.data(), "px", 96.0f);
+    if (image == nullptr || image->width <= 0.0f || image->height <= 0.0f) {
+        if (image != nullptr) {
+            nsvgDelete(image);
+        }
+        return false;
+    }
+
+    const float scaleX = static_cast<float>(targetWidth) / image->width;
+    const float scaleY = static_cast<float>(targetHeight) / image->height;
+    const float scale = std::max(0.0001f, std::min(scaleX, scaleY));
+    const float rasterWidth = image->width * scale;
+    const float rasterHeight = image->height * scale;
+    const float offsetX = (static_cast<float>(targetWidth) - rasterWidth) * 0.5f;
+    const float offsetY = (static_cast<float>(targetHeight) - rasterHeight) * 0.5f;
+
+    outWidth = targetWidth;
+    outHeight = targetHeight;
+    outPixels.assign(static_cast<size_t>(outWidth) * static_cast<size_t>(outHeight) * 4u, 0);
+
+    NSVGrasterizer* rasterizer = nsvgCreateRasterizer();
+    if (rasterizer == nullptr) {
+        nsvgDelete(image);
+        outPixels.clear();
+        outWidth = 0;
+        outHeight = 0;
+        return false;
+    }
+
+    nsvgRasterize(rasterizer, image, offsetX, offsetY, scale, outPixels.data(), outWidth, outHeight, outWidth * 4);
+    nsvgDeleteRasterizer(rasterizer);
+    nsvgDelete(image);
+
+    if (flipVertically) {
+        const size_t rowBytes = static_cast<size_t>(outWidth) * 4u;
+        std::vector<unsigned char> flipped(outPixels.size(), 0);
+        for (int y = 0; y < outHeight; ++y) {
+            const size_t srcOffset = static_cast<size_t>(y) * rowBytes;
+            const size_t dstOffset = static_cast<size_t>(outHeight - 1 - y) * rowBytes;
+            std::copy_n(outPixels.data() + srcOffset, rowBytes, flipped.data() + dstOffset);
+        }
+        outPixels.swap(flipped);
+    }
+    return !outPixels.empty();
+}
+
+bool ApplyDefaultWindowIcon(GLFWwindow* window, const std::string& svgPath) {
+    if (window == nullptr) {
+        return false;
+    }
+    auto applyRgbaIcon = [window](unsigned char* rgbaPixels, int width, int height) {
+        if (rgbaPixels == nullptr || width <= 0 || height <= 0) {
+            return false;
+        }
+        GLFWimage icon{};
+        icon.width = width;
+        icon.height = height;
+        icon.pixels = rgbaPixels;
+        glfwSetWindowIcon(window, 1, &icon);
+        return true;
+    };
+
+    auto tryApplyFromPath = [&](const std::string& candidatePath) {
+        const std::string resolvedPath = ResolveImagePath(candidatePath);
+        if (resolvedPath.empty()) {
+            return false;
+        }
+        if (HasSvgExtension(resolvedPath)) {
+            std::vector<unsigned char> pixels;
+            int width = 0;
+            int height = 0;
+            if (!RasterizeSvgFile(resolvedPath, 256, 256, false, pixels, width, height)) {
+                return false;
+            }
+            return applyRgbaIcon(pixels.data(), width, height);
+        }
+
+        int width = 0;
+        int height = 0;
+        int channels = 0;
+        unsigned char* pixels = stbi_load(resolvedPath.c_str(), &width, &height, &channels, 4);
+        if (pixels == nullptr) {
+            return false;
+        }
+        const bool applied = applyRgbaIcon(pixels, width, height);
+        stbi_image_free(pixels);
+        return applied;
+    };
+
+    if (tryApplyFromPath(svgPath)) {
+        return true;
+    }
+
+    static const char* fallbackPaths[] = {
+        "docs/icon.svg",
+        "docs/icon.png",
+        "icon.svg",
+        "icon.png"
+    };
+    for (const char* fallback : fallbackPaths) {
+        if (tryApplyFromPath(fallback)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool OpenExternalUrl(const std::string& url) {
+    if (url.empty()) {
+        return false;
+    }
+#if defined(_WIN32)
+    const HINSTANCE result = ShellExecuteA(nullptr, "open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    return reinterpret_cast<INT_PTR>(result) > 32;
+#elif defined(__APPLE__)
+    const std::string command = "open \"" + url + "\"";
+    return std::system(command.c_str()) == 0;
+#else
+    const std::string command = "xdg-open \"" + url + "\"";
+    return std::system(command.c_str()) == 0;
+#endif
+}
+
 static bool FloatEq(float a, float b, float epsilon = 0.0001f) {
     return std::abs(a - b) <= epsilon;
 }
@@ -1657,7 +1829,16 @@ static bool DecodeUtf8Codepoint(const std::string& text, size_t& index, unsigned
             ++index;
             return false;
         }
-        outCodepoint = ((ch & 0x1F) << 6) | (static_cast<unsigned char>(text[index + 1]) & 0x3F);
+        const unsigned char b1 = static_cast<unsigned char>(text[index + 1]);
+        if ((b1 & 0xC0) != 0x80) {
+            ++index;
+            return false;
+        }
+        outCodepoint = ((ch & 0x1F) << 6) | (b1 & 0x3F);
+        if (outCodepoint < 0x80) {
+            ++index;
+            return false;
+        }
         index += 2;
         return true;
     }
@@ -1666,9 +1847,19 @@ static bool DecodeUtf8Codepoint(const std::string& text, size_t& index, unsigned
             ++index;
             return false;
         }
+        const unsigned char b1 = static_cast<unsigned char>(text[index + 1]);
+        const unsigned char b2 = static_cast<unsigned char>(text[index + 2]);
+        if ((b1 & 0xC0) != 0x80 || (b2 & 0xC0) != 0x80) {
+            ++index;
+            return false;
+        }
         outCodepoint = ((ch & 0x0F) << 12) |
-                       ((static_cast<unsigned char>(text[index + 1]) & 0x3F) << 6) |
-                       (static_cast<unsigned char>(text[index + 2]) & 0x3F);
+                       ((b1 & 0x3F) << 6) |
+                       (b2 & 0x3F);
+        if (outCodepoint < 0x800 || (outCodepoint >= 0xD800 && outCodepoint <= 0xDFFF)) {
+            ++index;
+            return false;
+        }
         index += 3;
         return true;
     }
@@ -1677,10 +1868,21 @@ static bool DecodeUtf8Codepoint(const std::string& text, size_t& index, unsigned
             ++index;
             return false;
         }
+        const unsigned char b1 = static_cast<unsigned char>(text[index + 1]);
+        const unsigned char b2 = static_cast<unsigned char>(text[index + 2]);
+        const unsigned char b3 = static_cast<unsigned char>(text[index + 3]);
+        if ((b1 & 0xC0) != 0x80 || (b2 & 0xC0) != 0x80 || (b3 & 0xC0) != 0x80) {
+            ++index;
+            return false;
+        }
         outCodepoint = ((ch & 0x07) << 18) |
-                       ((static_cast<unsigned char>(text[index + 1]) & 0x3F) << 12) |
-                       ((static_cast<unsigned char>(text[index + 2]) & 0x3F) << 6) |
-                       (static_cast<unsigned char>(text[index + 3]) & 0x3F);
+                       ((b1 & 0x3F) << 12) |
+                       ((b2 & 0x3F) << 6) |
+                       (b3 & 0x3F);
+        if (outCodepoint < 0x10000 || outCodepoint > 0x10FFFF) {
+            ++index;
+            return false;
+        }
         index += 4;
         return true;
     }
@@ -2340,16 +2542,26 @@ GLuint Renderer::LoadImageTexture(const std::string& imagePath, bool flipVertica
         return cacheIt->second;
     }
 
+    std::vector<unsigned char> svgPixels;
     int width = 0;
     int height = 0;
     int channels = 0;
-    stbi_set_flip_vertically_on_load(flipVertically ? 1 : 0);
-    unsigned char* pixels = stbi_load(resolvedPath.c_str(), &width, &height, &channels, STBI_rgb_alpha);
-    if (pixels == nullptr || width <= 0 || height <= 0) {
-        if (pixels != nullptr) {
-            stbi_image_free(pixels);
+    unsigned char* pixels = nullptr;
+    if (HasSvgExtension(resolvedPath)) {
+        const int targetSize = 512;
+        if (!RasterizeSvgFile(resolvedPath, targetSize, targetSize, flipVertically, svgPixels, width, height)) {
+            return 0;
         }
-        return 0;
+        pixels = svgPixels.data();
+    } else {
+        stbi_set_flip_vertically_on_load(flipVertically ? 1 : 0);
+        pixels = stbi_load(resolvedPath.c_str(), &width, &height, &channels, STBI_rgb_alpha);
+        if (pixels == nullptr || width <= 0 || height <= 0) {
+            if (pixels != nullptr) {
+                stbi_image_free(pixels);
+            }
+            return 0;
+        }
     }
 
     GLuint textureId = 0;
@@ -2362,7 +2574,11 @@ GLuint Renderer::LoadImageTexture(const std::string& imagePath, bool flipVertica
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
     glBindTexture(GL_TEXTURE_2D, 0);
-    stbi_image_free(pixels);
+    if (!svgPixels.empty()) {
+        svgPixels.clear();
+    } else {
+        stbi_image_free(pixels);
+    }
 
     if (textureId != 0) {
         ImageTextureCache[resolvedPath] = textureId;

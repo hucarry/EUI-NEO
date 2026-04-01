@@ -42,6 +42,11 @@ const std::string text = EUINEO::UseDslApiText(
 - HTTP/HTTPS URL
 - `bing://daily?...`
 
+支持格式：
+
+- 位图：`png` / `jpg` / `jpeg` / `webp` 等常见格式
+- 矢量：`svg`（会在加载时栅格化为纹理再渲染）
+
 ## 图片加载示例
 
 ```cpp
@@ -70,6 +75,7 @@ ui.image("daily.bing")
 - 图片下载和解码为异步流程
 - 成功后会触发刷新，无需手动切页
 - 网络失败时可先放本地占位图，保证首屏稳定
+- `svg` 与位图使用同一 `ui.image(...).path(...)` / `url(...)` 接口
 
 ## 字体
 

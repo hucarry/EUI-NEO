@@ -358,8 +358,15 @@ public:
             }
         }
 
-        if (isFocused_ && cursorVisible_) {
+        if (isFocused_) {
             const CursorVisual cursor = cursorVisual(textX, firstLineBaseline, lineHeight, textScale, multiline);
+            State.imeCursorActive = true;
+            State.imeCursorX = cursor.x;
+            State.imeCursorY = cursor.y;
+            State.imeCursorH = cursor.h;
+            if (!cursorVisible_) {
+                return;
+            }
             Renderer::DrawRect(
                 cursor.x,
                 cursor.y,

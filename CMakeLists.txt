@@ -54,6 +54,15 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(stb)
 
+FetchContent_Declare(
+    nanosvg
+    URL https://github.com/memononen/nanosvg/archive/refs/heads/master.zip
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    TIMEOUT 30
+    TLS_VERIFY OFF
+)
+FetchContent_MakeAvailable(nanosvg)
+
 # 自动检测并查找系统已安装的 OpenGL
 find_package(OpenGL REQUIRED)
 find_package(CURL QUIET)
@@ -67,7 +76,7 @@ file(GLOB_RECURSE SRC_FILES CONFIGURE_DEPENDS "src/*.cpp")
 file(GLOB APP_ENTRY_FILES CONFIGURE_DEPENDS "app/*.cpp")
 
 add_library(eui_neo_core STATIC ${SRC_FILES})
-target_include_directories(eui_neo_core PUBLIC src third_party ${stb_SOURCE_DIR})
+target_include_directories(eui_neo_core PUBLIC src third_party ${stb_SOURCE_DIR} ${nanosvg_SOURCE_DIR}/src)
 target_link_libraries(eui_neo_core PUBLIC glfw glad OpenGL::GL)
 if(CURL_FOUND)
     target_link_libraries(eui_neo_core PUBLIC CURL::libcurl)

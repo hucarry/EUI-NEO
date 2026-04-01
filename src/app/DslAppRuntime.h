@@ -428,6 +428,7 @@ inline int RunDslApp(const DslAppConfig& config, const DslComposeFn& compose) {
         glfwTerminate();
         return -1;
     }
+    ApplyDefaultWindowIcon(window, "docs/icon.svg");
     {
         DslWindowState& state = ActiveDslWindowState();
         state.window = window;
