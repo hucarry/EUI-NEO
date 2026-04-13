@@ -111,6 +111,9 @@ RectFrame PrimitiveFrame(const UIPrimitive& primitive) {
 }
 
 bool PrimitiveContains(const UIPrimitive& primitive, float x, float y) {
+    if (State.inputBlockedByPopup && primitive.renderLayer != RenderLayer::Popup) {
+        return false;
+    }
     const RectFrame frame = PrimitiveFrame(primitive);
     return x >= frame.x && x <= frame.x + frame.width &&
            y >= frame.y && y <= frame.y + frame.height;
@@ -119,8 +122,10 @@ bool PrimitiveContains(const UIPrimitive& primitive, float x, float y) {
 void RequestPrimitiveRepaint(const UIPrimitive& primitive, const RectStyle& style, float expand, float duration) {
     (void)style;
     (void)expand;
-    (void)primitive;
-    Renderer::RequestRepaint(duration);
+    Renderer::InvalidateLayer(primitive.renderLayer);
+    if (duration > 0.0f) {
+        Renderer::RequestRepaint(duration);
+    }
 }
 
 PrimitiveClipScope::PrimitiveClipScope(const UIPrimitive& primitive) {

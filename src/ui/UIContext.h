@@ -14,6 +14,16 @@
 #include "../components/Sidebar.h"
 #include "../components/Slider.h"
 #include "../components/ListView.h"
+#include "../components/Switch.h"
+#include "../components/Checkbox.h"
+#include "../components/Radio.h"
+#include "../components/TextArea.h"
+#include "../components/Dialog.h"
+#include "../components/Tooltip.h"
+#include "../components/ContextMenu.h"
+#include "../components/Tabs.h"
+#include "../components/Toast.h"
+#include "../components/Table.h"
 #include <memory>
 #include <string>
 #include <type_traits>
@@ -26,6 +36,19 @@ namespace EUINEO {
 enum class FlexDirection {
     Row,
     Column
+};
+
+enum class MainAxisAlignment {
+    Start,
+    Center,
+    End
+};
+
+enum class CrossAxisAlignment {
+    Auto,
+    Start,
+    Center,
+    End
 };
 
 class UIContext {
@@ -53,6 +76,8 @@ public:
         LayoutBuilder& padding(float value);
         LayoutBuilder& padding(float horizontal, float vertical);
         LayoutBuilder& padding(float left, float top, float right, float bottom);
+        LayoutBuilder& justifyContent(MainAxisAlignment value);
+        LayoutBuilder& alignItems(CrossAxisAlignment value);
 
         template <typename Fn>
         void content(Fn&& compose) {
@@ -162,6 +187,8 @@ private:
         float paddingTop = 0.0f;
         float paddingRight = 0.0f;
         float paddingBottom = 0.0f;
+        MainAxisAlignment justifyContent = MainAxisAlignment::Start;
+        CrossAxisAlignment alignItems = CrossAxisAlignment::Auto;
         std::vector<LayoutItem> children;
     };
 
@@ -222,6 +249,8 @@ private:
         offsetStack_.pop_back();
     }
     void applyRuntimeContext(UINode* node);
+    void ensureDrawOrder();
+    std::uint64_t computeDrawOrderSignature() const;
 
     LayoutState* createLayout(FlexDirection direction);
     void beginLayout(LayoutState* layout);
@@ -251,9 +280,11 @@ private:
     std::vector<LayoutState*> layoutStack_;
     std::unordered_map<UINode*, Offset> baseContextOffset_;
     std::unordered_map<UINode*, std::vector<ScrollAreaNode*>> scrollBindings_;
+    std::vector<UINode*> pointerHotNodes_;
     bool treeChanged_ = false;
     bool needsRecompose_ = false;
-    std::uint64_t drawOrderStamp_ = 0;
+    std::uint64_t drawOrderSignature_ = 0;
+    bool drawOrderInitialized_ = false;
     float currentOffsetX_ = 0.0f;
     float currentOffsetY_ = 0.0f;
 };
@@ -363,6 +394,16 @@ inline UIContext::LayoutBuilder& UIContext::LayoutBuilder::padding(float left, f
     layout_->paddingTop = std::max(0.0f, top);
     layout_->paddingRight = std::max(0.0f, right);
     layout_->paddingBottom = std::max(0.0f, bottom);
+    return *this;
+}
+
+inline UIContext::LayoutBuilder& UIContext::LayoutBuilder::justifyContent(MainAxisAlignment value) {
+    layout_->justifyContent = value;
+    return *this;
+}
+
+inline UIContext::LayoutBuilder& UIContext::LayoutBuilder::alignItems(CrossAxisAlignment value) {
+    layout_->alignItems = value;
     return *this;
 }
 

@@ -28,6 +28,7 @@ public:
     MainPage() = default;
 
     void Update() {
+        const bool hadPendingTableToast = tableToastTrigger_;
         if (pageReveal_ < 1.0f) {
             const float previous = pageReveal_;
             pageReveal_ = Lerp(pageReveal_, 1.0f, State.deltaTime * 11.0f);
@@ -42,6 +43,9 @@ public:
         const std::uint64_t versionBeforeUpdate = stateVersion_;
         Compose();
         ui_.update();
+        if (ui_.wantsContinuousUpdate()) {
+            ui_.requestVisualRefresh(0.18f);
+        }
         if (hasPendingViewSwitch_) {
             const MainPageView target = pendingView_;
             hasPendingViewSwitch_ = false;
@@ -49,6 +53,9 @@ public:
         }
         if (stateVersion_ != versionBeforeUpdate || ui_.consumeRecomposeRequest()) {
             Compose();
+        }
+        if (hadPendingTableToast && tableToastTrigger_) {
+            tableToastTrigger_ = false;
         }
     }
 
@@ -64,19 +71,12 @@ public:
 private:
     void Compose() {
         const Layout layout = MakeLayout();
-        const float sidebarX = layout.sidebarX;
-        const float sidebarY = layout.sidebarY;
-        const float sidebarH = layout.sidebarH;
-        const float contentX = layout.contentX;
-        const float contentY = layout.contentY;
-        const float contentW = layout.contentW;
-        const float contentH = layout.contentH;
 
         ui_.begin("main");
 
         ui_.sidebar("sidebar")
-            .position(sidebarX, sidebarY)
-            .size(sidebarWidth_, sidebarH)
+            .position(layout.sidebarX, layout.sidebarY)
+            .size(sidebarWidth_, layout.sidebarH)
             .width(60.0f, sidebarWidth_)
             .layer(RenderLayer::Chrome)
             .brand("EUI", "NEO")
@@ -90,8 +90,8 @@ private:
             .build();
 
         ui_.glassPanel("content")
-            .position(contentX, contentY)
-            .size(contentW, contentH)
+            .position(layout.contentX, layout.contentY)
+            .size(layout.contentW, layout.contentH)
             .rounding(16.0f)
             .blur(progressValue_ * 0.15f)
             .layer(RenderLayer::Backdrop)
@@ -99,7 +99,7 @@ private:
             .build();
 
         ui_.panel("bg.red")
-            .position(contentX + contentW * 0.10f - 84.0f, contentY + 58.0f)
+            .position(layout.contentX + layout.contentW * 0.10f - 84.0f, layout.contentY + 58.0f)
             .size(196.0f, 196.0f)
             .background(0.98f, 0.36f, 0.36f, 0.92f)
             .layer(RenderLayer::Backdrop)
@@ -108,7 +108,7 @@ private:
             .build();
 
         ui_.panel("bg.green")
-            .position(contentX + contentW * 0.58f, contentY + 86.0f)
+            .position(layout.contentX + layout.contentW * 0.58f, layout.contentY + 86.0f)
             .size(164.0f, 164.0f)
             .background(0.30f, 0.92f, 0.58f, 0.88f)
             .layer(RenderLayer::Backdrop)
@@ -117,7 +117,7 @@ private:
             .build();
 
         ui_.panel("bg.blue")
-            .position(contentX + contentW * 0.30f, contentY + contentH * 0.44f)
+            .position(layout.contentX + layout.contentW * 0.30f, layout.contentY + layout.contentH * 0.44f)
             .size(246.0f, 246.0f)
             .background(0.34f, 0.52f, 1.0f, 0.90f)
             .layer(RenderLayer::Backdrop)
@@ -125,7 +125,7 @@ private:
             .zIndex(-3)
             .build();
 
-        ui_.pushClip(contentX, contentY, contentW, contentH);
+        ui_.pushClip(layout.contentX, layout.contentY, layout.contentW, layout.contentH);
         ComposeCurrentPage(PageBounds());
         ui_.popClip();
         ui_.end();
@@ -200,8 +200,11 @@ private:
             actions.onToggleIconAccent = [this] { ToggleHomeIconAccent(); };
             actions.onProgressChange = [this](float value) { SetProgressValue(value); };
             actions.onSegmentedChange = [this](int index) { SetSegmentedIndex(index); };
+            actions.onTabChange = [this](int index) { SetTabIndex(index); };
             actions.onInputChange = [this](const std::string& text) { SetInputText(text); };
+            actions.onTextAreaChange = [this](const std::string& text) { SetTextAreaText(text); };
             actions.onComboChange = [this](int index) { SetComboSelection(index); };
+            actions.onTableRowChange = [this](int index) { SetTableSelection(index); };
 
             HomePage::Compose(
                 ui_,
@@ -209,11 +212,13 @@ private:
                 bounds,
                 homeIconAccentEnabled_,
                 progressValue_,
-                segmentedItems_,
                 segmentedIndex_,
+                tabIndex_,
                 inputText_,
-                comboItems_,
+                textAreaText_,
                 comboSelection_,
+                tableSelection_,
+                tableToastTrigger_,
                 actions
             );
             break;
@@ -270,6 +275,37 @@ private:
         ++stateVersion_;
     }
 
+    void SetTabIndex(int index) {
+        const int clamped = std::clamp(index, 0, 2);
+        if (tabIndex_ == clamped) {
+            return;
+        }
+        tabIndex_ = clamped;
+        ++stateVersion_;
+    }
+
+    void SetTableSelection(int index) {
+        if (index >= 0) {
+            tableToastTrigger_ = true;
+        }
+        if (tableSelection_ == index) {
+            if (index >= 0) {
+                ++stateVersion_;
+            }
+            return;
+        }
+        tableSelection_ = index;
+        ++stateVersion_;
+    }
+
+    void SetTextAreaText(const std::string& text) {
+        if (textAreaText_ == text) {
+            return;
+        }
+        textAreaText_ = text;
+        ++stateVersion_;
+    }
+
     void ToggleHomeIconAccent() {
         homeIconAccentEnabled_ = !homeIconAccentEnabled_;
         ++stateVersion_;
@@ -321,12 +357,14 @@ private:
     float sidebarWidth_ = 86.0f;
     float contentInset_ = 34.0f;
     float progressValue_ = 0.30f;
-    bool homeIconAccentEnabled_ = true;
-    std::vector<std::string> segmentedItems_{"Apple", "Banana", "Cherry"};
+    bool homeIconAccentEnabled_ = false;
     int segmentedIndex_ = 0;
     std::string inputText_;
-    std::vector<std::string> comboItems_{"Item 1", "Item 2", "Item 3"};
+    std::string textAreaText_;
     int comboSelection_ = -1;
+    int tabIndex_ = 0;
+    int tableSelection_ = -1;
+    bool tableToastTrigger_ = false;
     float layoutSplit_ = 0.42f;
     std::uint32_t randomSeed_ = 0xC0FFEE11u;
     int accentIndex_ = 0;
