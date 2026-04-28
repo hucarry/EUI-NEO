@@ -3,7 +3,9 @@
 #include "core/dsl.h"
 
 #include <algorithm>
+#include <cerrno>
 #include <cmath>
+#include <cstdlib>
 #include <iomanip>
 #include <limits>
 #include <sstream>
@@ -65,11 +67,17 @@ std::string groupNumber(std::string text) {
 }
 
 double value() {
-    try {
-        return entry == "Error" ? 0.0 : std::stod(entry);
-    } catch (...) {
+    if (entry == "Error") {
         return 0.0;
     }
+
+    char* end = nullptr;
+    errno = 0;
+    const double parsed = std::strtod(entry.c_str(), &end);
+    if (end == entry.c_str() || *end != '\0' || errno == ERANGE || !std::isfinite(parsed)) {
+        return 0.0;
+    }
+    return parsed;
 }
 
 std::string opText(char op) {
