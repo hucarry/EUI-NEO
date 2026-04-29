@@ -12,6 +12,8 @@ if(MSVC)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
+set(EUI_MESA_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../mesa3d" CACHE PATH "Mesa3D root used by VM package targets")
+
 set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "Build the GLFW example programs" FORCE)
 set(GLFW_BUILD_TESTS OFF CACHE BOOL "Build the GLFW test programs" FORCE)
 set(GLFW_BUILD_DOCS OFF CACHE BOOL "Build the GLFW documentation" FORCE)
@@ -99,8 +101,37 @@ function(configure_opengl_app target_name)
 endfunction()
 
 file(GLOB APP_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/app/*.cpp")
+set(EUI_APP_TARGETS)
 foreach(app_source ${APP_SOURCES})
     get_filename_component(app_name "${app_source}" NAME_WE)
+    list(APPEND EUI_APP_TARGETS ${app_name})
     add_executable(${app_name} main.cpp "${app_source}" ${CORE_SOURCES} ${APP_ICON_RESOURCE})
     configure_opengl_app(${app_name})
+
+    if(WIN32)
+        add_custom_target(package_vm_${app_name}
+            COMMAND powershell -ExecutionPolicy Bypass -File
+                "${CMAKE_CURRENT_SOURCE_DIR}/tools/package-vm.ps1"
+                -App ${app_name}
+                -Config $<CONFIG>
+                -BuildRoot "${CMAKE_BINARY_DIR}"
+                -MesaRoot "${EUI_MESA_ROOT}"
+            DEPENDS ${app_name}
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+            COMMENT "Packaging ${app_name} with Mesa software OpenGL for VMs"
+            VERBATIM
+        )
+    endif()
 endforeach()
+
+if(WIN32)
+    set(EUI_VM_PACKAGE_TARGETS)
+    foreach(app_name ${EUI_APP_TARGETS})
+        list(APPEND EUI_VM_PACKAGE_TARGETS package_vm_${app_name})
+    endforeach()
+
+    add_custom_target(package_vm_all
+        DEPENDS ${EUI_VM_PACKAGE_TARGETS}
+        COMMENT "Packaging all apps with Mesa software OpenGL for VMs"
+    )
+endif()

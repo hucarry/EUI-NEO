@@ -1,6 +1,7 @@
 param(
     [string]$App = "calculator",
     [string]$Config = "Release",
+    [string]$BuildRoot = "build",
     [string]$MesaRoot = "",
     [string]$OutputRoot = "dist\vm"
 )
@@ -8,7 +9,12 @@ param(
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
-$buildDir = Join-Path $repoRoot "build\$Config"
+$buildRootPath = if ([System.IO.Path]::IsPathRooted($BuildRoot)) {
+    $BuildRoot
+} else {
+    Join-Path $repoRoot $BuildRoot
+}
+$buildDir = Join-Path $buildRootPath $Config
 $exePath = Join-Path $buildDir "$App.exe"
 $assetsPath = Join-Path $buildDir "assets"
 $outputDir = Join-Path $repoRoot "$OutputRoot\$App"
