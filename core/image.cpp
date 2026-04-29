@@ -605,10 +605,10 @@ bool ImagePrimitive::retainSharedResources() {
     }
 
     const char* vertexSource =
-        "#version 330 core\n"
-        "layout(location = 0) in vec2 aScreenPos;\n"
-        "layout(location = 1) in vec2 aLocalPos;\n"
-        "layout(location = 2) in vec2 aUV;\n"
+        "#version 130\n"
+        "in vec2 aScreenPos;\n"
+        "in vec2 aLocalPos;\n"
+        "in vec2 aUV;\n"
         "uniform vec2 uWindowSize;\n"
         "out vec2 vLocalPos;\n"
         "out vec2 vUV;\n"
@@ -621,7 +621,7 @@ bool ImagePrimitive::retainSharedResources() {
         "}\n";
 
     const char* fragmentSource =
-        "#version 330 core\n"
+        "#version 130\n"
         "in vec2 vLocalPos;\n"
         "in vec2 vUV;\n"
         "out vec4 FragColor;\n"
@@ -659,6 +659,9 @@ bool ImagePrimitive::retainSharedResources() {
     resources.shaderProgram = glCreateProgram();
     glAttachShader(resources.shaderProgram, vertexShader);
     glAttachShader(resources.shaderProgram, fragmentShader);
+    glBindAttribLocation(resources.shaderProgram, 0, "aScreenPos");
+    glBindAttribLocation(resources.shaderProgram, 1, "aLocalPos");
+    glBindAttribLocation(resources.shaderProgram, 2, "aUV");
     glLinkProgram(resources.shaderProgram);
     glDeleteShader(vertexShader);
     glDeleteShader(fragmentShader);

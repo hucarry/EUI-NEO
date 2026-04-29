@@ -73,9 +73,9 @@ public:
 
     bool initialize() {
         const char* vertexSource =
-            "#version 330 core\n"
-            "layout(location = 0) in vec2 aScreenPos;\n"
-            "layout(location = 1) in vec2 aLocalPos;\n"
+            "#version 130\n"
+            "in vec2 aScreenPos;\n"
+            "in vec2 aLocalPos;\n"
             "uniform vec2 uWindowSize;\n"
             "out vec2 vLocalPos;\n"
             "void main() {\n"
@@ -86,7 +86,7 @@ public:
             "}\n";
 
         const char* fragmentSource =
-            "#version 330 core\n"
+            "#version 130\n"
             "in vec2 vLocalPos;\n"
             "out vec4 FragColor;\n"
             "uniform vec4 uFillColor;\n"
@@ -325,6 +325,8 @@ private:
         resources.shaderProgram = glCreateProgram();
         glAttachShader(resources.shaderProgram, vertexShader);
         glAttachShader(resources.shaderProgram, fragmentShader);
+        glBindAttribLocation(resources.shaderProgram, 0, "aScreenPos");
+        glBindAttribLocation(resources.shaderProgram, 1, "aLocalPos");
         glLinkProgram(resources.shaderProgram);
         glDeleteShader(vertexShader);
         glDeleteShader(fragmentShader);
@@ -677,8 +679,8 @@ public:
 
     bool initialize() {
         const char* vertexSource =
-            "#version 330 core\n"
-            "layout(location = 0) in vec2 aScreenPos;\n"
+            "#version 130\n"
+            "in vec2 aScreenPos;\n"
             "uniform vec2 uWindowSize;\n"
             "void main() {\n"
             "    vec2 ndc = vec2((aScreenPos.x / uWindowSize.x) * 2.0 - 1.0,\n"
@@ -687,7 +689,7 @@ public:
             "}\n";
 
         const char* fragmentSource =
-            "#version 330 core\n"
+            "#version 130\n"
             "out vec4 FragColor;\n"
             "uniform vec4 uFillColor;\n"
             "uniform float uOpacity;\n"
@@ -800,6 +802,7 @@ private:
         resources.shaderProgram = glCreateProgram();
         glAttachShader(resources.shaderProgram, vertexShader);
         glAttachShader(resources.shaderProgram, fragmentShader);
+        glBindAttribLocation(resources.shaderProgram, 0, "aScreenPos");
         glLinkProgram(resources.shaderProgram);
         glDeleteShader(vertexShader);
         glDeleteShader(fragmentShader);

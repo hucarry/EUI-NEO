@@ -1,8 +1,16 @@
 cmake_minimum_required(VERSION 3.14)
+if(POLICY CMP0091)
+    cmake_policy(SET CMP0091 NEW)
+endif()
+
 project(ModernOpenGLApp VERSION 1.0)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED TRUE)
+
+if(MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
 
 set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "Build the GLFW example programs" FORCE)
 set(GLFW_BUILD_TESTS OFF CACHE BOOL "Build the GLFW test programs" FORCE)
@@ -11,7 +19,7 @@ set(GLFW_INSTALL OFF CACHE BOOL "Generate installation target" FORCE)
 
 include(FetchContent)
 
-set(BUILD_SHARED_LIBS ON CACHE BOOL "Build shared libraries" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build shared libraries" FORCE)
 FetchContent_Declare(
     glfw
     URL https://github.com/glfw/glfw/archive/refs/tags/3.4.zip
@@ -68,11 +76,14 @@ function(configure_opengl_app target_name)
     if(WIN32)
         target_link_libraries(${target_name} PRIVATE winmm urlmon shell32)
 
-        add_custom_command(TARGET ${target_name} POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            $<TARGET_FILE:glfw>
-            $<TARGET_FILE_DIR:${target_name}>
-        )
+        get_target_property(GLFW_TARGET_TYPE glfw TYPE)
+        if(GLFW_TARGET_TYPE STREQUAL "SHARED_LIBRARY")
+            add_custom_command(TARGET ${target_name} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:glfw>
+                $<TARGET_FILE_DIR:${target_name}>
+            )
+        endif()
     endif()
 
     if(TARGET CURL::libcurl)

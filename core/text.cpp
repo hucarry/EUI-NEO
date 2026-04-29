@@ -95,10 +95,10 @@ GLuint compileGlShader(GLenum type, const char* source) {
 
 bool createSharedTextRenderResources(SharedTextRenderResources& resources) {
     const char* vertexSource =
-        "#version 330 core\n"
-        "layout(location = 0) in vec2 aPos;\n"
-        "layout(location = 1) in vec2 aUv;\n"
-        "layout(location = 2) in float aUseSdf;\n"
+        "#version 130\n"
+        "in vec2 aPos;\n"
+        "in vec2 aUv;\n"
+        "in float aUseSdf;\n"
         "uniform vec2 uWindowSize;\n"
         "out vec2 vUv;\n"
         "out float vUseSdf;\n"
@@ -111,7 +111,7 @@ bool createSharedTextRenderResources(SharedTextRenderResources& resources) {
         "}\n";
 
     const char* fragmentSource =
-        "#version 330 core\n"
+        "#version 130\n"
         "in vec2 vUv;\n"
         "in float vUseSdf;\n"
         "out vec4 FragColor;\n"
@@ -140,6 +140,9 @@ bool createSharedTextRenderResources(SharedTextRenderResources& resources) {
     resources.shaderProgram = glCreateProgram();
     glAttachShader(resources.shaderProgram, vertexShader);
     glAttachShader(resources.shaderProgram, fragmentShader);
+    glBindAttribLocation(resources.shaderProgram, 0, "aPos");
+    glBindAttribLocation(resources.shaderProgram, 1, "aUv");
+    glBindAttribLocation(resources.shaderProgram, 2, "aUseSdf");
     glLinkProgram(resources.shaderProgram);
     glDeleteShader(vertexShader);
     glDeleteShader(fragmentShader);

@@ -17,7 +17,11 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
+#include <string>
 #include <thread>
+
+std::string gLastGlfwError;
 
 struct WindowState {
     bool needsRender = true;
@@ -28,6 +32,35 @@ struct WindowState {
     double lastFrameRateLimit = 0.0;
     double lastRefreshRateUpdate = 0.0;
 };
+
+void appendStartupLog(const std::string& message) {
+    FILE* file = nullptr;
+#ifdef _WIN32
+    fopen_s(&file, "eui-startup.log", "ab");
+#else
+    file = std::fopen("eui-startup.log", "ab");
+#endif
+    if (!file) {
+        return;
+    }
+    std::fwrite(message.data(), 1, message.size(), file);
+    std::fwrite("\n", 1, 1, file);
+    std::fclose(file);
+}
+
+void showStartupError(const std::string& message) {
+    appendStartupLog("FATAL: " + message);
+#ifdef _WIN32
+    MessageBoxA(nullptr, message.c_str(), "EUI startup error", MB_OK | MB_ICONERROR);
+#else
+    std::fprintf(stderr, "%s\n", message.c_str());
+#endif
+}
+
+void glfwErrorCallback(int code, const char* description) {
+    gLastGlfwError = "GLFW error " + std::to_string(code) + ": " + (description ? description : "unknown");
+    appendStartupLog(gLastGlfwError);
+}
 
 struct TimerResolutionGuard {
     TimerResolutionGuard() {
@@ -149,10 +182,7 @@ void waitForNextFrame(GLFWwindow* window, const WindowState& windowState) {
     }
 }
 
-int main() {
-    glfwInit();
-    TimerResolutionGuard timerResolution;
-
+void applyCommonWindowHints() {
     glfwWindowHint(GLFW_SAMPLES, 0);
     glfwWindowHint(GLFW_RED_BITS, 8);
     glfwWindowHint(GLFW_GREEN_BITS, 8);
@@ -160,12 +190,101 @@ int main() {
     glfwWindowHint(GLFW_ALPHA_BITS, 8);
     glfwWindowHint(GLFW_DEPTH_BITS, 16);
     glfwWindowHint(GLFW_STENCIL_BITS, 0);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+}
 
-    GLFWwindow* window = glfwCreateWindow(app::initialWindowWidth(), app::initialWindowHeight(), app::windowTitle(), nullptr, nullptr);
+GLFWwindow* createCompatibleWindow() {
+    struct ContextAttempt {
+        int major = 0;
+        int minor = 0;
+        int profile = GLFW_OPENGL_ANY_PROFILE;
+        const char* label = "";
+    };
+
+    const ContextAttempt attempts[] = {
+        {3, 3, GLFW_OPENGL_CORE_PROFILE, "OpenGL 3.3 core"},
+        {3, 0, GLFW_OPENGL_ANY_PROFILE, "OpenGL 3.0"},
+        {0, 0, GLFW_OPENGL_ANY_PROFILE, "default OpenGL"}
+    };
+
+    for (const ContextAttempt& attempt : attempts) {
+        glfwDefaultWindowHints();
+        applyCommonWindowHints();
+        if (attempt.major > 0) {
+            glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, attempt.major);
+            glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, attempt.minor);
+            glfwWindowHint(GLFW_OPENGL_PROFILE, attempt.profile);
+        }
+
+        GLFWwindow* window = glfwCreateWindow(app::initialWindowWidth(),
+                                             app::initialWindowHeight(),
+                                             app::windowTitle(),
+                                             nullptr,
+                                             nullptr);
+        if (window) {
+            appendStartupLog(std::string("Created ") + attempt.label + " context");
+            return window;
+        }
+
+        appendStartupLog(std::string("Failed to create ") + attempt.label + " context");
+    }
+
+    return nullptr;
+}
+
+bool hasRequiredOpenGLVersion() {
+    const char* versionText = reinterpret_cast<const char*>(glGetString(GL_VERSION));
+    if (!versionText) {
+        showStartupError("OpenGL did not report a version. The virtual machine graphics driver may be missing.");
+        return false;
+    }
+
+    appendStartupLog(std::string("OpenGL version: ") + versionText);
+    const char* rendererText = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
+    if (rendererText) {
+        appendStartupLog(std::string("OpenGL renderer: ") + rendererText);
+    }
+    const char* vendorText = reinterpret_cast<const char*>(glGetString(GL_VENDOR));
+    if (vendorText) {
+        appendStartupLog(std::string("OpenGL vendor: ") + vendorText);
+    }
+
+    char* parseEnd = nullptr;
+    const long major = std::strtol(versionText, &parseEnd, 10);
+    if (parseEnd == versionText || !parseEnd || *parseEnd != '.') {
+        showStartupError(std::string("Could not parse OpenGL version: ") + versionText);
+        return false;
+    }
+
+    const char* minorStart = parseEnd + 1;
+    const long minor = std::strtol(minorStart, &parseEnd, 10);
+    if (parseEnd == minorStart) {
+        showStartupError(std::string("Could not parse OpenGL version: ") + versionText);
+        return false;
+    }
+
+    if (major > 3 || (major == 3 && minor >= 0)) {
+        return true;
+    }
+
+    showStartupError(std::string("OpenGL 3.0 or newer is required. Current context is ") + versionText +
+                     ". Enable 3D acceleration in the VM or use a Mesa software OpenGL runtime.");
+    return false;
+}
+
+int main() {
+    std::remove("eui-startup.log");
+    appendStartupLog("Starting application");
+    glfwSetErrorCallback(glfwErrorCallback);
+
+    if (!glfwInit()) {
+        showStartupError(gLastGlfwError.empty() ? "glfwInit failed." : gLastGlfwError);
+        return -1;
+    }
+    TimerResolutionGuard timerResolution;
+
+    GLFWwindow* window = createCompatibleWindow();
     if (!window) {
+        showStartupError(gLastGlfwError.empty() ? "Could not create an OpenGL window." : gLastGlfwError);
         glfwTerminate();
         return -1;
     }
@@ -195,11 +314,18 @@ int main() {
     });
 
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
+        showStartupError("Failed to load OpenGL functions with glad.");
+        glfwTerminate();
+        return -1;
+    }
+
+    if (!hasRequiredOpenGLVersion()) {
         glfwTerminate();
         return -1;
     }
 
     if (!app::initialize(window)) {
+        showStartupError("Application initialization failed. This can happen when the VM OpenGL driver cannot compile the UI shaders.");
         glfwTerminate();
         return -1;
     }
